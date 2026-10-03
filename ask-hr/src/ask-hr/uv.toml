@@ -1,0 +1,6 @@
+system-certs = true
+
+[[index]]
+name = "microsoft-cfs"
+url = "https://packagefeedproxy.microsoft.io/pypi/simple"
+default = true

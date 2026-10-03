@@ -1,0 +1,78 @@
+{
+  "sourceWorkbook": "Test cases - open topics.xlsx",
+  "coverageRule": "Every document or SharePoint content issue must map to at least one hard agent, retrieval, ingestion, or lifecycle test.",
+  "includedIssues": [
+    {
+      "id": "ACT-011",
+      "issue": "Wrong country list returned for EEM Region",
+      "tests": ["AGENT-EEM-NO-EVIDENCE", "DOC-REGION-001", "DOC-CLASSIFY-001"]
+    },
+    {
+      "id": "ACT-013",
+      "issue": "No answer returned for Time and Attendance queries",
+      "tests": ["AGENT-FI-TIME-ATTENDANCE", "DOC-KNOWN-001", "DOC-COVERAGE-001"]
+    },
+    {
+      "id": "ACT-017",
+      "issue": "Finland payroll content is missing or incorrect",
+      "tests": ["AGENT-FI-PAYROLL", "DOC-COVERAGE-001"]
+    },
+    {
+      "id": "ACT-001",
+      "issue": "UK queries return Finland or Sweden compensation links",
+      "tests": ["AGENT-UNSUPPORTED-UK", "DOC-REGION-001"]
+    },
+    {
+      "id": "ACT-005",
+      "issue": "Outdated KPI data returned as current",
+      "tests": ["DOC-LIFECYCLE-001", "DOC-OUTDATED-KPI-001", "AGENT-NO-EVIDENCE"]
+    },
+    {
+      "id": "ACT-007",
+      "issue": "Operative deadlines and explanatory text are inaccurate",
+      "tests": ["AGENT-OPERATIVE-DEADLINE", "DOC-LIFECYCLE-001", "DOC-CITATION-001"]
+    },
+    {
+      "id": "ACT-014",
+      "issue": "Known performance guide is not retrieved",
+      "tests": ["AGENT-PERFORMANCE-GUIDE", "DOC-COVERAGE-001"]
+    },
+    {
+      "id": "ACT-020",
+      "issue": "Merit process guidance contains legacy Dovetail links",
+      "tests": ["DOC-STALE-LINK-001", "DOC-LIFECYCLE-001"]
+    },
+    {
+      "id": "ACT-022",
+      "issue": "Restricted SharePoint sites prevent content retrieval",
+      "tests": ["DOC-MISSING-SOURCE-001", "DOC-COVERAGE-001"]
+    },
+    {
+      "id": "ACT-046",
+      "issue": "Country-specific content is not clearly labelled",
+      "tests": ["AGENT-REGION-LABEL", "AGENT-CITATIONS", "DOC-CITATION-001"]
+    }
+  ],
+  "excludedIssues": [
+    {
+      "id": "ACT-018",
+      "reason": "User-profile locale detection was explicitly excluded from this document-content scope."
+    },
+    {
+      "id": "ACT-019",
+      "reason": "Workday live-data routing was explicitly excluded."
+    },
+    {
+      "id": "ACT-043",
+      "reason": "ESS-to-SSA handoff and routing were explicitly excluded."
+    },
+    {
+      "id": "ACT-008",
+      "reason": "Workday worker-goal security scope was explicitly excluded."
+    },
+    {
+      "id": "ACT-032",
+      "reason": "Workday manager multi-geography product capability was explicitly excluded."
+    }
+  ]
+}

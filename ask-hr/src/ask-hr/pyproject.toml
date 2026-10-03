@@ -1,0 +1,15 @@
+[project]
+name = "ask-hr"
+version = "0.1.0"
+description = "Ask HR Microsoft Foundry hosted agent."
+requires-python = ">=3.13"
+dependencies = [
+    "agent-framework-azure-ai-search",
+    "agent-framework-foundry",
+    "agent-framework-foundry-hosting>=1.0.0b260813",
+    "azure-ai-agentserver-core>=2.1.0,<3",
+    "azure-identity",
+    "azure-search-documents",
+    "pydantic",
+    "python-dotenv",
+]

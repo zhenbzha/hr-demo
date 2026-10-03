@@ -1,0 +1,8 @@
+name: smoke-core
+agent:
+    name: ask-hr
+    kind: hosted
+    config: .agent_configs\baseline\metadata.yaml
+options:
+    eval_model: ask-hr-gpt-6.1-sol
+max_samples: 15

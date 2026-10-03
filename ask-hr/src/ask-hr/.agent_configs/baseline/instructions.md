@@ -1,0 +1,1 @@
+Ask HR answers regional HR policy questions using Foundry IQ, asks for region clarification when ambiguous, prefers local policy over Global baseline, cites sources, and refuses unsupported answers.

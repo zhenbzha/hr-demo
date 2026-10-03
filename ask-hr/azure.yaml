@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: ask-hr-agent
+requiredVersions:
+  azd: ">=1.32.0"
+  extensions:
+    azure.ai.agents: ">=1.0.0-beta.17"
+    azure.ai.projects: ">=1.0.0-beta.8"
+
+services:
+  ai-project:
+    host: azure.ai.project
+    deployments:
+      - name: ask-hr-gpt-6.1-sol
+        model:
+          format: OpenAI
+          name: gpt-6.1-sol
+          version: "2026-09-29"
+        sku:
+          name: GlobalStandard
+          capacity: 10
+
+  ask-hr:
+    host: azure.ai.agent
+    project: src/ask-hr
+    language: python
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: bundled
+    uses:
+      - ai-project
+    kind: hosted
+    name: ask-hr
+    description: Ask HR answers regional HR policy questions using Foundry IQ.
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+    env:
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      AZURE_SEARCH_ENDPOINT: ${AZURE_SEARCH_ENDPOINT}
+      AZURE_SEARCH_KNOWLEDGE_BASE_NAME: ${AZURE_SEARCH_KNOWLEDGE_BASE}
+      AZURE_SEARCH_KNOWLEDGE_SOURCE_NAME: ${AZURE_SEARCH_KNOWLEDGE_SOURCE}
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
+infra:
+  provider: microsoft.foundry
+
+hooks:
+  postdeploy:
+    windows:
+      shell: pwsh
+      run: ./scripts/grant_agent_search_role.ps1
