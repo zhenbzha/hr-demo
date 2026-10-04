@@ -3,33 +3,33 @@ export type ChatTurn = {
   text: string;
 };
 
-export function parseChatMessages(value: unknown): ChatTurn[] {
+export type ChatRequest = {
+  message: string;
+  previousResponseId?: string;
+};
+
+export function parseChatRequest(value: unknown): ChatRequest {
   if (!value || typeof value !== "object") {
     throw new Error("Request body must be a JSON object");
   }
-  const messages = (value as { messages?: unknown }).messages;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new Error("messages must be a non-empty array");
+  const message = (value as { message?: unknown }).message;
+  if (typeof message !== "string" || !message.trim()) {
+    throw new Error("message must be a non-empty string");
   }
-  if (messages.length > 30) {
-    throw new Error("messages cannot exceed 30 turns");
+  if (message.length > 4_000) {
+    throw new Error("message is too long");
   }
-
-  return messages.map((item, index) => {
-    if (!item || typeof item !== "object") {
-      throw new Error(`messages[${index}] must be an object`);
-    }
-    const role = (item as { role?: unknown }).role;
-    const text = (item as { text?: unknown }).text;
-    if (role !== "user" && role !== "assistant") {
-      throw new Error(`messages[${index}].role is invalid`);
-    }
-    if (typeof text !== "string" || !text.trim()) {
-      throw new Error(`messages[${index}].text must be non-empty`);
-    }
-    if (text.length > 4_000) {
-      throw new Error(`messages[${index}].text is too long`);
-    }
-    return { role, text: text.trim() };
-  });
+  const previousResponseId = (value as { previousResponseId?: unknown })
+    .previousResponseId;
+  if (
+    previousResponseId !== undefined &&
+    (typeof previousResponseId !== "string" ||
+      !/^resp_[A-Za-z0-9_-]+$/.test(previousResponseId))
+  ) {
+    throw new Error("previousResponseId is invalid");
+  }
+  return {
+    message: message.trim(),
+    previousResponseId,
+  };
 }

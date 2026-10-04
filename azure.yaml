@@ -10,4 +10,6 @@ hooks:
   postprovision:
     windows:
       shell: pwsh
-      run: ./scripts/provision_entra.ps1
+      run: |
+        ./scripts/provision_entra.ps1
+        ./scripts/configure_teams_identity_and_bot.ps1

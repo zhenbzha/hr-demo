@@ -1,35 +1,31 @@
-"use client";
-
 import { LogOut } from "lucide-react";
-import { signIn, signOut } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 
 export function SignInButton() {
   return (
-    <Button
-      type="button"
-      className="mt-8 h-12 w-full"
-      onClick={() => void signIn("azure-ad", { callbackUrl: "/" })}
-    >
-      <MicrosoftLogo />
-      Sign in with Microsoft
+    <Button asChild className="mt-8 h-12 w-full">
+      <a href="/api/auth/login">
+        <MicrosoftLogo />
+        Sign in with Microsoft
+      </a>
     </Button>
   );
 }
 
 export function SignOutButton({ compact = false }: { compact?: boolean }) {
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size={compact ? "sm" : "default"}
-      className={compact ? undefined : "mt-4 w-full"}
-      onClick={() => void signOut({ callbackUrl: "/" })}
-    >
-      {!compact && <LogOut />}
-      Sign out
-    </Button>
+    <form action="/api/auth/logout" method="post">
+      <Button
+        type="submit"
+        variant="outline"
+        size={compact ? "sm" : "default"}
+        className={compact ? undefined : "mt-4 w-full"}
+      >
+        {!compact && <LogOut />}
+        Sign out
+      </Button>
+    </form>
   );
 }
 

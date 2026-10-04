@@ -1,11 +1,13 @@
 targetScope = 'resourceGroup'
 
 param containerRegistryName string
+param assignDeployerImpersonationRole bool
 param deployerPrincipalId string
 param documentIntelligenceName string
 param foundryAccountName string
 param foundryProjectName string
 param foundryProjectPrincipalId string
+param impersonationRoleDefinitionId string
 param ingestionPrincipalId string
 param keyVaultName string
 param searchPrincipalId string
@@ -15,6 +17,7 @@ param webPrincipalId string
 
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var azureAiUserRoleId = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
+var foundryAgentConsumerRoleId = 'eed3b665-ab3a-47b6-8f48-c9382fb1dad6'
 var cognitiveServicesOpenAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 var keyVaultSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
@@ -63,13 +66,23 @@ resource webAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource webFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(foundryProject.id, webPrincipalId, azureAiUserRoleId)
+resource webFoundryConsumer 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryProject.id, webPrincipalId, foundryAgentConsumerRoleId)
   scope: foundryProject
   properties: {
     principalId: webPrincipalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiUserRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', foundryAgentConsumerRoleId)
+  }
+}
+
+resource webFoundryUserImpersonation 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryProject.id, webPrincipalId, impersonationRoleDefinitionId)
+  scope: foundryProject
+  properties: {
+    principalId: webPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: impersonationRoleDefinitionId
   }
 }
 
@@ -148,6 +161,15 @@ resource deployerFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01
   properties: {
     principalId: deployerPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiUserRoleId)
+  }
+}
+
+resource deployerFoundryUserImpersonation 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignDeployerImpersonationRole) {
+  name: guid(foundryProject.id, deployerPrincipalId, impersonationRoleDefinitionId)
+  scope: foundryProject
+  properties: {
+    principalId: deployerPrincipalId
+    roleDefinitionId: impersonationRoleDefinitionId
   }
 }
 

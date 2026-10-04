@@ -14,8 +14,14 @@ param principalId string
 @description('Object ID of the user or service principal running document ingestion.')
 param ingestionPrincipalId string
 
+@description('Grant the deployment principal permission to send represented-user identities for local diagnostics.')
+param assignDeployerImpersonationRole bool = false
+
 @description('Container image deployed to the Ask HR web Container App.')
 param webImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
+@description('Container image deployed to the Ask HR Microsoft 365 adapter.')
+param m365AdapterImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 @description('Resource group for the isolated Ask HR demo.')
 param resourceGroupName string = 'rg-ask-hr-demo'
@@ -67,6 +73,7 @@ module foundry './modules/foundry.bicep' = {
   scope: resourceGroup
   params: {
     accountName: 'aif-askhr-${resourceToken}'
+    classifierDeploymentName: 'ask-hr-gpt-4.1-mini'
     generationDeploymentName: 'ask-hr-gpt-6.1-sol'
     generationModelCapacity: 10
     location: location
@@ -117,6 +124,29 @@ module containerApps './modules/container-apps.bicep' = {
   }
 }
 
+module userImpersonationRole './modules/user-impersonation-role.bicep' = {
+  name: 'ask-hr-user-impersonation-role'
+  params: {
+    assignableScopeId: resourceGroup.id
+  }
+}
+
+module m365Adapter './modules/m365-adapter.bicep' = {
+  name: 'm365-adapter'
+  scope: resourceGroup
+  params: {
+    applicationInsightsConnectionString: monitoring.outputs.applicationInsightsConnectionString
+    containerAppsEnvironmentName: containerApps.outputs.containerAppsEnvironmentName
+    containerRegistryName: containerApps.outputs.containerRegistryName
+    foundryAccountName: foundry.outputs.accountName
+    foundryProjectName: foundry.outputs.projectName
+    impersonationRoleDefinitionId: userImpersonationRole.outputs.roleDefinitionId
+    location: location
+    serviceImageName: m365AdapterImage
+    tags: tags
+  }
+}
+
 module roleAssignments './modules/role-assignments.bicep' = {
   name: 'role-assignments'
   scope: resourceGroup
@@ -127,6 +157,8 @@ module roleAssignments './modules/role-assignments.bicep' = {
     foundryAccountName: foundry.outputs.accountName
     foundryProjectName: foundry.outputs.projectName
     foundryProjectPrincipalId: foundry.outputs.projectPrincipalId
+    impersonationRoleDefinitionId: userImpersonationRole.outputs.roleDefinitionId
+    assignDeployerImpersonationRole: assignDeployerImpersonationRole
     keyVaultName: keyVault.outputs.name
     searchPrincipalId: search.outputs.principalId
     searchServiceName: search.outputs.name
@@ -142,6 +174,7 @@ output AZURE_SUBSCRIPTION_ID string = subscription().subscriptionId
 output AZURE_TENANT_ID string = subscription().tenantId
 
 output AZURE_AI_FOUNDRY_ACCOUNT_NAME string = foundry.outputs.accountName
+output AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME string = foundry.outputs.classifierDeploymentName
 output AZURE_AI_PROJECT_NAME string = foundry.outputs.projectName
 output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
 output AZURE_AI_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint
@@ -173,6 +206,14 @@ output AZURE_CONTAINER_APPS_ENVIRONMENT_NAME string = containerApps.outputs.cont
 output SERVICE_WEB_NAME string = containerApps.outputs.containerAppName
 output SERVICE_WEB_URI string = containerApps.outputs.containerAppUri
 output AZURE_CLIENT_ID string = containerApps.outputs.webClientId
+
+output SERVICE_M365_ADAPTER_NAME string = m365Adapter.outputs.containerAppName
+output SERVICE_M365_ADAPTER_URI string = m365Adapter.outputs.containerAppUri
+output M365_ADAPTER_FQDN string = m365Adapter.outputs.containerAppFqdn
+output M365_ADAPTER_CLIENT_ID string = m365Adapter.outputs.managedIdentityClientId
+output M365_ADAPTER_PRINCIPAL_ID string = m365Adapter.outputs.managedIdentityPrincipalId
+output M365_ADAPTER_RESOURCE_ID string = m365Adapter.outputs.managedIdentityResourceId
+output FOUNDRY_AGENT_RESPONSES_ENDPOINT string = m365Adapter.outputs.foundryAgentResponsesEndpoint
 
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
 output APPLICATIONINSIGHTS_NAME string = monitoring.outputs.applicationInsightsName

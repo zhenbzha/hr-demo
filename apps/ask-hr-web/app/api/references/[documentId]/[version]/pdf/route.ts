@@ -51,7 +51,7 @@ async function handle(
   includeBody: boolean,
 ) {
   const session = await getCurrentSession();
-  if (!session?.user) {
+  if (!session?.account) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -100,7 +100,7 @@ export async function GET(
   context: { params: Promise<{ documentId: string; version: string }> },
 ) {
   const session = await getCurrentSession();
-  if (!session?.user) {
+  if (!session?.account) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

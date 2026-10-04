@@ -9,10 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -73,6 +69,8 @@ export function PdfReferencePanel({
   const [pdf, setPdf] = useState<PDFDocumentProxy>();
   const [pageNumber, setPageNumber] = useState(citation.pageStart || 1);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [renderWidth, setRenderWidth] = useState(0);
+  const [pageReady, setPageReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
@@ -151,7 +149,20 @@ export function PdfReferencePanel({
   }, [contextUrl, pdfUrl]);
 
   useEffect(() => {
-    if (!pdf || !canvasRef.current || pageContainer.size.width <= 0) {
+    const measuredWidth = Math.round(pageContainer.size.width);
+    if (measuredWidth <= 0) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setRenderWidth((current) =>
+        current === measuredWidth ? current : measuredWidth,
+      );
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [pageContainer.size.width]);
+
+  useEffect(() => {
+    if (!pdf || !canvasRef.current || renderWidth <= 0) {
       return;
     }
 
@@ -164,8 +175,9 @@ export function PdfReferencePanel({
       if (!page || cancelled || !canvasRef.current) {
         return;
       }
+      setPageReady(false);
       const initialViewport = page.getViewport({ scale: 1 });
-      const availableWidth = Math.max(280, pageContainer.size.width - 32);
+      const availableWidth = Math.max(280, renderWidth - 32);
       const scale = availableWidth / initialViewport.width;
       const viewport = page.getViewport({ scale });
       const outputScale = window.devicePixelRatio || 1;
@@ -189,6 +201,9 @@ export function PdfReferencePanel({
         viewport,
       });
       await renderTask.promise;
+      if (!cancelled) {
+        setPageReady(true);
+      }
     }
     void render().catch((caught) => {
       if (
@@ -206,7 +221,7 @@ export function PdfReferencePanel({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [pageContainer.size.width, pdf, pageNumber]);
+  }, [pdf, pageNumber, renderWidth]);
 
   const canGoPrevious = pageNumber > 1;
   const canGoNext = !!pdf && pageNumber < pdf.numPages;
@@ -217,7 +232,7 @@ export function PdfReferencePanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-100">
-      <div className="flex shrink-0 items-start gap-3 border-b bg-white px-4 py-3">
+      <div className="flex shrink-0 items-center gap-3 border-b bg-white px-4 py-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
           <FileText className="h-4 w-4" />
         </div>
@@ -266,80 +281,72 @@ export function PdfReferencePanel({
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-4">
-          {loading && (
-            <div className="space-y-3">
-              <Skeleton className="h-[680px] w-full" />
-              <Skeleton className="h-24 w-full" />
-            </div>
-          )}
+        <div className="p-4">
+          {loading && <Skeleton className="h-[680px] w-full" />}
           {error && (
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
               {error}
             </div>
           )}
           {!loading && !error && (
-            <>
+            <div
+              ref={pageContainer.ref}
+              className="overflow-auto rounded-xl border bg-slate-200 p-4"
+            >
               <div
-                ref={pageContainer.ref}
-                className="overflow-auto rounded-xl border bg-slate-200 p-4"
+                className="relative mx-auto overflow-hidden bg-white"
+                style={{
+                  ...pageStyle,
+                  width:
+                    viewportSize.width > 0 ? "var(--pdf-page-width)" : "100%",
+                  height:
+                    viewportSize.height > 0
+                      ? "var(--pdf-page-height)"
+                      : undefined,
+                  aspectRatio:
+                    viewportSize.width > 0 && viewportSize.height > 0
+                      ? `${viewportSize.width} / ${viewportSize.height}`
+                      : "0.707",
+                }}
               >
-                <div
-                  className="relative mx-auto"
-                  style={{
-                    ...pageStyle,
-                    width: "var(--pdf-page-width)",
-                    height: "var(--pdf-page-height)",
-                  }}
-                >
-                  <canvas ref={canvasRef} className="bg-white shadow-sm" />
-                  {annotationPage &&
-                    viewportSize.width > 0 &&
-                    polygons.length > 0 && (
-                      <svg
-                        className="pointer-events-none absolute inset-0"
-                        viewBox={`0 0 ${annotationPage.width} ${annotationPage.height}`}
-                        preserveAspectRatio="none"
-                        aria-hidden="true"
-                      >
-                        {polygons.map((polygon) => (
-                          <polygon
-                            key={polygon.join("-")}
-                            points={Array.from(
-                              { length: polygon.length / 2 },
-                              (_, pointIndex) =>
-                                `${polygon[pointIndex * 2]},${
-                                  polygon[pointIndex * 2 + 1]
-                                }`,
-                            ).join(" ")}
-                            fill="rgba(250, 204, 21, 0.32)"
-                            stroke="rgba(202, 138, 4, 0.65)"
-                            strokeWidth={0.015}
-                          />
-                        ))}
-                      </svg>
-                    )}
-                </div>
-              </div>
-              <div className="rounded-xl border bg-white p-4">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Relevant policy text
-                </p>
-                {polygons.length === 0 && (
-                  <p className="mt-2 text-xs text-amber-700">
-                    Exact page highlighting is unavailable for this passage.
-                  </p>
+                {!pageReady && (
+                  <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
                 )}
-                <div className="prose-hr mt-3 text-sm leading-6 text-slate-700">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeRaw, rehypeSanitize]}
-                  >
-                    {citation.excerpt}
-                  </ReactMarkdown>
-                </div>
+                <canvas
+                  ref={canvasRef}
+                  className={`bg-white shadow-sm transition-opacity duration-100 ${
+                    pageReady ? "opacity-100" : "opacity-0"
+                  }`}
+                />
+                {annotationPage &&
+                  pageReady &&
+                  viewportSize.width > 0 &&
+                  polygons.length > 0 && (
+                    <svg
+                      className="pointer-events-none absolute inset-0"
+                      viewBox={`0 0 ${annotationPage.width} ${annotationPage.height}`}
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
+                    >
+                      {polygons.map((polygon) => (
+                        <polygon
+                          key={polygon.join("-")}
+                          points={Array.from(
+                            { length: polygon.length / 2 },
+                            (_, pointIndex) =>
+                              `${polygon[pointIndex * 2]},${
+                                polygon[pointIndex * 2 + 1]
+                              }`,
+                          ).join(" ")}
+                          fill="rgba(250, 204, 21, 0.32)"
+                          stroke="rgba(202, 138, 4, 0.65)"
+                          strokeWidth={0.015}
+                        />
+                      ))}
+                    </svg>
+                  )}
               </div>
-            </>
+            </div>
           )}
         </div>
       </ScrollArea>

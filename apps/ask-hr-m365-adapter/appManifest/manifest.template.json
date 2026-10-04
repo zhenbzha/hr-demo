@@ -1,0 +1,47 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.22/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.22",
+  "version": "1.0.0",
+  "id": "${BOT_APP_ID}",
+  "developer": {
+    "name": "Microsoft",
+    "websiteUrl": "https://www.microsoft.com",
+    "privacyUrl": "https://privacy.microsoft.com",
+    "termsOfUseUrl": "https://www.microsoft.com/legal/terms-of-use"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Ask HR",
+    "full": "Ask HR"
+  },
+  "description": {
+    "short": "Answers questions about supported HR policies.",
+    "full": "Ask questions about supported HR policies and receive grounded answers with policy citations."
+  },
+  "accentColor": "#047857",
+  "copilotAgents": {
+    "customEngineAgents": [
+      {
+        "id": "${BOT_APP_ID}",
+        "type": "bot"
+      }
+    ]
+  },
+  "bots": [
+    {
+      "botId": "${BOT_APP_ID}",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["token.botframework.com", "${BOT_DOMAIN}"],
+  "webApplicationInfo": {
+    "id": "${BOT_APP_ID}",
+    "resource": "api://botid-${BOT_APP_ID}"
+  }
+}

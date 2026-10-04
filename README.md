@@ -14,7 +14,8 @@ The current stage provisions the isolated `rg-ask-hr-demo` environment,
 including:
 
 - Microsoft Foundry account and project;
-- `gpt-6.1-sol` and `text-embedding-3-large` deployments;
+- `gpt-4.1-mini`, `gpt-6.1-sol`, and `text-embedding-3-large`
+  deployments;
 - Azure AI Search;
 - Document Intelligence;
 - Storage, Key Vault, Container Registry, and Container Apps;

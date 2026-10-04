@@ -14,8 +14,14 @@
     "ingestionPrincipalId": {
       "value": "${AZURE_INGESTION_PRINCIPAL_ID}"
     },
+    "assignDeployerImpersonationRole": {
+      "value": "${ASSIGN_DEPLOYER_IMPERSONATION_ROLE}"
+    },
     "webImage": {
       "value": "${WEB_IMAGE}"
+    },
+    "m365AdapterImage": {
+      "value": "${M365_ADAPTER_IMAGE}"
     }
   }
 }

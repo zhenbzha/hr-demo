@@ -6,10 +6,11 @@ requires-python = ">=3.13"
 dependencies = [
     "agent-framework-azure-ai-search",
     "agent-framework-foundry",
-    "agent-framework-foundry-hosting>=1.0.0b260813",
     "azure-ai-agentserver-core>=2.1.0,<3",
+    "azure-ai-agentserver-responses>=2.1.0,<3",
     "azure-identity",
     "azure-search-documents",
+    "httpx",
     "pydantic",
     "python-dotenv",
 ]

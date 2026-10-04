@@ -1,6 +1,8 @@
 targetScope = 'resourceGroup'
 
 param accountName string
+param classifierDeploymentName string
+param classifierModelCapacity int = 10
 param generationDeploymentName string
 param generationModelCapacity int = 10
 param location string
@@ -14,6 +16,19 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.1' = {
     allowProjectManagement: true
     customSubDomainName: accountName
     deployments: [
+      {
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-4.1-mini'
+          version: '2025-04-14'
+        }
+        name: classifierDeploymentName
+        raiPolicyName: 'Microsoft.DefaultV2'
+        sku: {
+          capacity: classifierModelCapacity
+          name: 'GlobalStandard'
+        }
+      }
       {
         model: {
           format: 'OpenAI'
@@ -80,6 +95,7 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = {
 output accountId string = account.outputs.resourceId
 output accountName string = account.outputs.name
 output accountPrincipalId string = account.outputs.?systemAssignedMIPrincipalId ?? ''
+output classifierDeploymentName string = classifierDeploymentName
 output embeddingDeploymentName string = embeddingDeploymentName
 output generationDeploymentName string = generationDeploymentName
 output openAiEndpoint string = 'https://${account.outputs.name}.openai.azure.com'

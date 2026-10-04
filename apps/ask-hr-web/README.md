@@ -23,9 +23,19 @@ az containerapp update `
 ## Local development
 
 Copy `.env.example` to the git-ignored `.env.local` and provide the existing
-Ask HR Entra, Foundry, and ADLS settings. Generate `NEXTAUTH_SECRET` from at
-least 32 cryptographically random bytes and keep it separate from
-`ENTRA_CLIENT_SECRET`.
+Ask HR Entra, Foundry, and ADLS settings.
+
+The Entra application must have the Azure Cognitive Search delegated
+`user_impersonation` permission with tenant consent. MSAL Node owns access and
+refresh tokens in its process-local token cache; application code never reads
+refresh tokens. The browser cookie contains only an opaque random session ID.
+The Container App is intentionally limited to one replica for this POC cache
+design.
+
+Each chat turn uses `acquireTokenSilent` for the signed-in account and sends
+the Search token to the hosted agent separately from the web app's Foundry
+workload token.
+Only the Foundry response ID is retained for conversation continuation.
 
 Sign in to Azure CLI for local Foundry and ADLS access, then run:
 

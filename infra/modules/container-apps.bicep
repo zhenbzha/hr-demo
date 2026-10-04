@@ -119,7 +119,7 @@ module containerApp 'br/public:avm/res/app/container-app:0.23.0' = {
     ]
     name: containerAppName
     scaleSettings: {
-      maxReplicas: 2
+      maxReplicas: 1
       minReplicas: 0
     }
     tags: union(tags, {

@@ -1,25 +1,26 @@
 import { SignInButton } from "@/components/auth/auth-buttons";
 import { ChatShell } from "@/components/chat/chat-shell";
 import { Card } from "@/components/ui/card";
+import { authErrorMessage } from "@/lib/auth/auth-errors";
 import { getCurrentSession } from "@/lib/auth/session";
 
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ authError?: string }>;
 }) {
   const [session, params] = await Promise.all([
     getCurrentSession(),
     searchParams,
   ]);
+  const signInError = authErrorMessage(params.authError);
 
-  if (session?.user) {
+  if (session?.account) {
     return (
       <ChatShell
         user={{
-          name: session.user.name || undefined,
-          username:
-            session.user.email || session.user.name || "Signed-in employee",
+          name: session.account.name,
+          username: session.account.username,
         }}
       />
     );
@@ -41,9 +42,9 @@ export default async function Home({
             policies, with document and page citations.
           </p>
 
-          {params.error && (
+          {signInError && (
             <p className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              Sign-in could not be completed. Please try again.
+              {signInError}
             </p>
           )}
 
