@@ -11,6 +11,8 @@ param location string
 param logAnalyticsWorkspaceResourceId string
 param searchEndpoint string
 param storageBlobEndpoint string
+param storageDfsEndpoint string
+param storageFileSystemName string
 param tags object = {}
 param webImage string
 
@@ -80,6 +82,14 @@ module containerApp 'br/public:avm/res/app/container-app:0.23.0' = {
           {
             name: 'AZURE_STORAGE_BLOB_ENDPOINT'
             value: storageBlobEndpoint
+          }
+          {
+            name: 'AZURE_STORAGE_DFS_ENDPOINT'
+            value: storageDfsEndpoint
+          }
+          {
+            name: 'AZURE_STORAGE_FILE_SYSTEM'
+            value: storageFileSystemName
           }
         ]
         image: webImage

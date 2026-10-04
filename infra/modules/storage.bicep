@@ -4,28 +4,20 @@ param location string
 param name string
 param tags object = {}
 
-var manifestContainerName = 'manifests'
-var sessionContainerName = 'sessions'
-var sourceContainerName = 'hr-source'
+var fileSystemName = 'hr-content'
 
 module storage 'br/public:avm/res/storage/storage-account:0.33.1' = {
   params: {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
+    defaultToOAuthAuthentication: true
+    enableHierarchicalNamespace: true
     blobServices: {
       containerDeleteRetentionPolicyDays: 7
       containerDeleteRetentionPolicyEnabled: true
       containers: [
         {
-          name: sourceContainerName
-          publicAccess: 'None'
-        }
-        {
-          name: manifestContainerName
-          publicAccess: 'None'
-        }
-        {
-          name: sessionContainerName
+          name: fileSystemName
           publicAccess: 'None'
         }
       ]
@@ -44,13 +36,14 @@ module storage 'br/public:avm/res/storage/storage-account:0.33.1' = {
     publicNetworkAccess: 'Enabled'
     requireInfrastructureEncryption: true
     skuName: 'Standard_LRS'
-    tags: tags
+    tags: union(tags, {
+      SecurityControl: 'Ignore'
+    })
   }
 }
 
 output blobEndpoint string = storage.outputs.primaryBlobEndpoint
+output dfsEndpoint string = 'https://${storage.outputs.name}.dfs.${environment().suffixes.storage}/'
+output fileSystemName string = fileSystemName
 output id string = storage.outputs.resourceId
-output manifestContainerName string = manifestContainerName
 output name string = storage.outputs.name
-output sessionContainerName string = sessionContainerName
-output sourceContainerName string = sourceContainerName

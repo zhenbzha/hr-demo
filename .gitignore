@@ -6,11 +6,15 @@
 !**/.env.example
 
 **/.cache/
+**/.direnv/
 **/.next/
+**/.turbo/
 **/.venv/
 **/__pycache__/
 **/*.py[cod]
 **/node_modules/
+**/tmp/
+**/temp/
 
 ask-hr/src/ask-hr/packages/
 
@@ -29,9 +33,21 @@ ask-hr/src/ask-hr/packages/
 **/output/
 **/playwright-report/
 **/test-results/
+**/logs/
 
 **/.DS_Store
+**/.envrc
+**/.envrc.*
+**/.eslintcache
+**/.stylelintcache
+**/*.dmp
+**/*.dump
+**/*.key
+**/*.log
 **/*.pem
+**/*.pfx
+**/*.p12
+**/*.trace
 **/*.tsbuildinfo
 **/next-env.d.ts
 **/npm-debug.log*

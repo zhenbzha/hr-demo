@@ -194,11 +194,21 @@ def load_or_analyze_pages(
         analyze_local_pdf,
         remove_document_control,
     )
-    from ingestion.page import Page
+    from ingestion.page import Page, TextLine
 
     if reuse_analysis and output_path.exists():
         payload = json.loads(output_path.read_text(encoding="utf-8"))
-        pages = [Page(**item) for item in payload]
+        pages = [
+            Page(
+                **{
+                    **item,
+                    "lines": [
+                        TextLine(**line) for line in item.get("lines", [])
+                    ],
+                }
+            )
+            for item in payload
+        ]
         for page in pages:
             page.text = remove_document_control(page.text)
         return [page for page in pages if page.text]
@@ -213,6 +223,19 @@ def load_or_analyze_pages(
                     "offset": page.offset,
                     "text": page.text,
                     "tables": page.tables,
+                    "width": page.width,
+                    "height": page.height,
+                    "unit": page.unit,
+                    "angle": page.angle,
+                    "lines": [
+                        {
+                            "text": line.text,
+                            "polygon": line.polygon,
+                            "span_offset": line.span_offset,
+                            "span_length": line.span_length,
+                        }
+                        for line in page.lines
+                    ],
                 }
                 for page in pages
             ],
@@ -274,6 +297,8 @@ def base_document(
         "policy_topic": manifest_item["policyTopic"],
         "version": manifest_item["version"],
         "source_uri": manifest_item["sourceUrl"],
+        "document_path": manifest_item["documentPath"],
+        "annotation_path": manifest_item["annotationPath"],
         "heading_text": heading_text,
         "chunk_text": text,
         "page_start": min(pages) if pages else None,
@@ -385,6 +410,16 @@ def index_schema(
                 "retrievable": True,
             },
             {"name": "source_uri", "type": "Edm.String", "retrievable": True},
+            {
+                "name": "document_path",
+                "type": "Edm.String",
+                "retrievable": True,
+            },
+            {
+                "name": "annotation_path",
+                "type": "Edm.String",
+                "retrievable": True,
+            },
             {
                 "name": "heading_text",
                 "type": "Edm.String",
@@ -586,7 +621,7 @@ def validate_index(
             "select": (
                 "chunk_id,document_id,document_title,region,language,"
                 "policy_topic,heading_text,"
-                "page_start,page_end,source_uri"
+                "page_start,page_end,source_uri,document_path,annotation_path"
             ),
             "top": 5,
             "count": True,
@@ -630,6 +665,131 @@ def validate_index(
             f"got {sorted(actual_document_ids)}"
         )
     return {"hybridQuery": result, "facets": facets}
+
+
+def annotation_payload(
+    *,
+    manifest_item: dict[str, Any],
+    pages: list[Any],
+) -> dict[str, Any]:
+    return {
+        "documentId": manifest_item["documentId"],
+        "documentTitle": Path(manifest_item["name"]).stem.replace("_", " "),
+        "version": manifest_item["version"],
+        "sha256": manifest_item["sha256"],
+        "pages": {
+            str(page.page_num + 1): {
+                "width": page.width,
+                "height": page.height,
+                "unit": page.unit,
+                "angle": page.angle,
+                "lines": [
+                    {
+                        "text": line.text,
+                        "polygon": line.polygon,
+                        "spanOffset": line.span_offset,
+                        "spanLength": line.span_length,
+                    }
+                    for line in page.lines
+                ],
+            }
+            for page in pages
+        },
+    }
+
+
+def ensure_directory(file_system_client: Any, path: str) -> None:
+    from azure.core.exceptions import ResourceExistsError
+
+    current = ""
+    for segment in path.split("/"):
+        current = f"{current}/{segment}".strip("/")
+        try:
+            file_system_client.get_directory_client(current).create_directory()
+        except ResourceExistsError:
+            pass
+
+
+def upload_adls_content(
+    *,
+    values: dict[str, str],
+    manifest: dict[str, Any],
+    active_items: list[dict[str, Any]],
+    annotations: dict[str, dict[str, Any]],
+) -> None:
+    from azure.core.exceptions import ResourceExistsError
+    from azure.identity import AzureCliCredential
+    from azure.storage.filedatalake import ContentSettings, DataLakeServiceClient
+
+    endpoint = values["AZURE_STORAGE_DFS_ENDPOINT"]
+    file_system_name = values["AZURE_STORAGE_FILE_SYSTEM"]
+    credential = AzureCliCredential()
+    service_client = DataLakeServiceClient(
+        account_url=endpoint,
+        credential=credential,
+    )
+    file_system_client = service_client.get_file_system_client(file_system_name)
+    try:
+        try:
+            file_system_client.create_file_system()
+        except ResourceExistsError:
+            pass
+
+        for directory in ("documents", "annotations", "manifests"):
+            ensure_directory(file_system_client, directory)
+
+        for item in active_items:
+            document_path = item["documentPath"]
+            annotation_path = item["annotationPath"]
+            for path in (document_path, annotation_path):
+                parent = path.rsplit("/", 1)[0]
+                ensure_directory(file_system_client, parent)
+
+            metadata = {
+                "documentid": item["documentId"],
+                "region": item["region"],
+                "language": item["language"],
+                "version": item["version"],
+                "sha256": item["sha256"],
+            }
+            pdf_client = file_system_client.get_file_client(document_path)
+            pdf_client.upload_data(
+                Path(item["localPath"]).read_bytes(),
+                overwrite=True,
+                metadata=metadata,
+                content_settings=ContentSettings(
+                    content_type="application/pdf",
+                ),
+            )
+            annotation_client = file_system_client.get_file_client(
+                annotation_path
+            )
+            annotation_client.upload_data(
+                json.dumps(
+                    annotations[item["documentId"]],
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+                overwrite=True,
+                metadata=metadata,
+                content_settings=ContentSettings(
+                    content_type="application/json; charset=utf-8",
+                ),
+            )
+            print(f"Uploaded PDF and annotations for {item['documentId']}")
+
+        manifest_client = file_system_client.get_file_client(
+            "manifests/manifest.json"
+        )
+        manifest_client.upload_data(
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+            overwrite=True,
+            content_settings=ContentSettings(
+                content_type="application/json; charset=utf-8",
+            ),
+        )
+    finally:
+        service_client.close()
+        credential.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -709,6 +869,11 @@ def main() -> None:
     ]
     if not active_manifest_items:
         raise ValueError("The manifest contains no active documents")
+    for item in active_manifest_items:
+        version = str(item["version"])
+        document_id = str(item["documentId"])
+        item["documentPath"] = f"documents/{document_id}/{version}.pdf"
+        item["annotationPath"] = f"annotations/{document_id}/{version}.json"
     values = azd_values()
 
     document_endpoint = values["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"]
@@ -767,6 +932,7 @@ def main() -> None:
         credential=credential,
     )
     documents: list[dict[str, Any]] = []
+    annotations: dict[str, dict[str, Any]] = {}
     try:
         for manifest_item in active_manifest_items:
             local_path = Path(manifest_item["localPath"])
@@ -791,6 +957,10 @@ def main() -> None:
                 raise RuntimeError(
                     f"No chunks were created for {local_path}"
                 )
+            annotations[manifest_item["documentId"]] = annotation_payload(
+                manifest_item=manifest_item,
+                pages=pages,
+            )
             documents.extend(document_chunks)
             print(
                 f"Created {len(document_chunks)} chunks from "
@@ -806,6 +976,14 @@ def main() -> None:
         encoding="utf-8",
     )
     print(f"Created {len(documents)} chunks from {len(active_manifest_items)} PDFs")
+
+    print("Uploading PDFs, annotations, and manifest to ADLS Gen2...")
+    upload_adls_content(
+        values=values,
+        manifest=manifest,
+        active_items=active_manifest_items,
+        annotations=annotations,
+    )
 
     print("Generating embeddings...")
     embed_documents(

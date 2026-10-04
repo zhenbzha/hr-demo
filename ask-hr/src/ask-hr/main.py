@@ -60,10 +60,11 @@ grounding, tool calls, or returned evidence. Say "the policy does not specify"
 or "the available policy does not cover" when a requested detail is absent.
 
 Answer in the user's language. Do not interleave citations with the answer.
-After the answer, append one machine-readable citation line per unique source
-page in exactly this format: "Source: <document title>, p. <page>." Use "pp."
-for a page range. These lines are rendered separately by the application.
-Never invent a policy, entitlement, deadline, source, link, or citation.
+After the answer, append one machine-readable line for every unique supporting
+Search chunk in exactly this format: "Reference: <chunk_id>". Copy chunk_id
+verbatim from the tool evidence. These lines are rendered separately by the
+application. Never invent a policy, entitlement, deadline, source, link,
+reference, or chunk ID.
 """.strip()
 
 

@@ -1,25 +1,28 @@
 FROM node:24-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN npm install --global pnpm@10.11.0
+RUN npm config set registry https://packagefeedproxy.microsoft.io/npm/ \
+    && npm install --global pnpm@10.11.0
 
 FROM base AS deps
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
+COPY .npmrc package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV ENTRA_TENANT_ID=00000000-0000-0000-0000-000000000000
-ENV ENTRA_CLIENT_ID=00000000-0000-0000-0000-000000000000
-ENV ENTRA_CLIENT_SECRET=build-placeholder
-ENV ENTRA_REDIRECT_URI=http://localhost:3000/api/auth/callback
-ENV FOUNDRY_AGENT_ENDPOINT=https://example.invalid/responses
-ENV APP_BASE_URL=http://localhost:3000
-RUN pnpm build
+RUN NEXT_TELEMETRY_DISABLED=1 \
+    ENTRA_TENANT_ID=00000000-0000-0000-0000-000000000000 \
+    ENTRA_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+    ENTRA_CLIENT_SECRET=build-placeholder \
+    NEXTAUTH_URL=https://example.invalid \
+    NEXTAUTH_SECRET=build-placeholder-with-at-least-32-bytes \
+    FOUNDRY_AGENT_ENDPOINT=https://example.invalid/responses \
+    AZURE_STORAGE_DFS_ENDPOINT=https://example.dfs.core.windows.net/ \
+    AZURE_STORAGE_FILE_SYSTEM=hr-content \
+    pnpm build
 
 FROM base AS runner
 WORKDIR /app

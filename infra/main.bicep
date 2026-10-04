@@ -47,7 +47,7 @@ module storage './modules/storage.bicep' = {
   scope: resourceGroup
   params: {
     location: location
-    name: 'staskhr${resourceToken}'
+    name: 'dlsaskhr${resourceToken}'
     tags: tags
   }
 }
@@ -110,6 +110,8 @@ module containerApps './modules/container-apps.bicep' = {
     logAnalyticsWorkspaceResourceId: monitoring.outputs.logAnalyticsResourceId
     searchEndpoint: search.outputs.endpoint
     storageBlobEndpoint: storage.outputs.blobEndpoint
+    storageDfsEndpoint: storage.outputs.dfsEndpoint
+    storageFileSystemName: storage.outputs.fileSystemName
     tags: tags
     webImage: webImage
   }
@@ -159,9 +161,8 @@ output AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT string = documentIntelligence.output
 
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_STORAGE_BLOB_ENDPOINT string = storage.outputs.blobEndpoint
-output AZURE_STORAGE_SOURCE_CONTAINER string = storage.outputs.sourceContainerName
-output AZURE_STORAGE_MANIFEST_CONTAINER string = storage.outputs.manifestContainerName
-output AZURE_STORAGE_SESSION_CONTAINER string = storage.outputs.sessionContainerName
+output AZURE_STORAGE_DFS_ENDPOINT string = storage.outputs.dfsEndpoint
+output AZURE_STORAGE_FILE_SYSTEM string = storage.outputs.fileSystemName
 
 output AZURE_KEY_VAULT_NAME string = keyVault.outputs.name
 output AZURE_KEY_VAULT_ENDPOINT string = keyVault.outputs.uri

@@ -13,6 +13,12 @@ function Invoke-AzdValue {
     return $value.Trim()
 }
 
+function New-RandomSecret {
+    $bytes = [byte[]]::new(32)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    return [Convert]::ToBase64String($bytes)
+}
+
 $keyVaultName = Invoke-AzdValue 'AZURE_KEY_VAULT_NAME'
 $resourceGroup = Invoke-AzdValue 'AZURE_RESOURCE_GROUP'
 $tenantId = Invoke-AzdValue 'AZURE_TENANT_ID'
@@ -20,9 +26,20 @@ $containerAppName = Invoke-AzdValue 'SERVICE_WEB_NAME'
 $foundryAgentEndpoint = Invoke-AzdValue 'FOUNDRY_AGENT_ENDPOINT'
 $webUri = Invoke-AzdValue 'SERVICE_WEB_URI'
 $redirectUris = @(
-    "$webUri/api/auth/callback"
-    'http://localhost:3000/api/auth/callback'
+    "$webUri/api/auth/callback/azure-ad"
+    'http://localhost:3000/api/auth/callback/azure-ad'
 )
+
+$nextAuthSecretName = azd env get-value NEXTAUTH_SECRET_NAME 2>$null
+$createNextAuthSecret = $LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($nextAuthSecretName)
+if ($createNextAuthSecret) {
+    $nextAuthSecretName = 'nextauth-secret'
+    $nextAuthSecret = New-RandomSecret
+}
+else {
+    $nextAuthSecretName = $nextAuthSecretName.Trim()
+    $nextAuthSecret = $null
+}
 
 $clientId = azd env get-value ENTRA_CLIENT_ID 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -113,6 +130,32 @@ try {
         throw 'Failed to configure the Container App Entra secret.'
     }
 
+    if ($createNextAuthSecret) {
+        az deployment group create `
+            --name 'ask-hr-nextauth-secret' `
+            --resource-group $resourceGroup `
+            --template-file 'infra/modules/key-vault-secret.bicep' `
+            --parameters `
+                vaultName=$keyVaultName `
+                secretName=$nextAuthSecretName `
+                secretValue=$nextAuthSecret `
+            --only-show-errors `
+            --output none
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to deploy the NextAuth session secret through Azure Resource Manager.'
+        }
+
+        az containerapp secret set `
+            --name $containerAppName `
+            --resource-group $resourceGroup `
+            --secrets "$nextAuthSecretName=$nextAuthSecret" `
+            --only-show-errors `
+            --output none
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to configure the Container App NextAuth session secret.'
+        }
+    }
+
     az containerapp update `
         --name $containerAppName `
         --resource-group $resourceGroup `
@@ -120,11 +163,10 @@ try {
             "ENTRA_TENANT_ID=$tenantId" `
             "ENTRA_CLIENT_ID=$clientId" `
             'ENTRA_CLIENT_SECRET=secretref:entra-client-secret' `
-            "ENTRA_REDIRECT_URI=$webUri/api/auth/callback" `
+            "NEXTAUTH_URL=$webUri" `
+            "NEXTAUTH_SECRET=secretref:$nextAuthSecretName" `
             "FOUNDRY_AGENT_ENDPOINT=$foundryAgentEndpoint" `
             'FOUNDRY_AGENT_NAME=ask-hr' `
-            "APP_BASE_URL=$webUri" `
-            'SESSION_COOKIE_NAME=ask_hr_session' `
         --only-show-errors `
         --output none
     if ($LASTEXITCODE -ne 0) {
@@ -133,10 +175,12 @@ try {
 }
 finally {
     $credential.password = $null
+    $nextAuthSecret = $null
 }
 
 azd env set ENTRA_TENANT_ID $tenantId
 azd env set ENTRA_CLIENT_SECRET_NAME 'entra-client-secret'
+azd env set NEXTAUTH_SECRET_NAME $nextAuthSecretName
 if ($LASTEXITCODE -ne 0) {
     throw 'Failed to persist Entra configuration in the azd environment.'
 }

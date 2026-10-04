@@ -1,0 +1,11 @@
+[project]
+name = "hr-demo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-documentintelligence==1.0.2",
+    "azure-identity==1.26.0",
+    "azure-search-documents==12.0.0",
+    "azure-storage-file-datalake==12.26.0",
+    "tiktoken==0.14.0",
+]

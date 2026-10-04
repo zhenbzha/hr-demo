@@ -4,6 +4,14 @@ from typing import Any, Optional
 
 
 @dataclass
+class TextLine:
+    text: str
+    polygon: list[float] = field(default_factory=list)
+    span_offset: int = 0
+    span_length: int = 0
+
+
+@dataclass
 class ImageOnPage:
     bytes: bytes
     bbox: tuple[float, float, float, float]  # Pixels
@@ -104,6 +112,11 @@ class Page:
     text: str
     images: list[ImageOnPage] = field(default_factory=list)
     tables: list[str] = field(default_factory=list)
+    width: float | None = None
+    height: float | None = None
+    unit: str | None = None
+    angle: float | None = None
+    lines: list[TextLine] = field(default_factory=list)
 
 
 @dataclass

@@ -119,12 +119,15 @@
       "query": "What is the India POSH complaint process?",
       "expectedDocumentIds": ["HR-IN-004"],
       "requiredCitationFields": [
+        "chunk_id",
         "document_id",
         "document_title",
         "region",
-        "source_uri",
         "page_start",
-        "page_end"
+        "page_end",
+        "document_path",
+        "annotation_path",
+        "chunk_text"
       ]
     },
     {

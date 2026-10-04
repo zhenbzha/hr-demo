@@ -55,6 +55,8 @@ def knowledge_source_definition(
                 {"name": "policy_topic"},
                 {"name": "version"},
                 {"name": "source_uri"},
+                {"name": "document_path"},
+                {"name": "annotation_path"},
                 {"name": "heading_text"},
                 {"name": "chunk_text"},
                 {"name": "page_start"},

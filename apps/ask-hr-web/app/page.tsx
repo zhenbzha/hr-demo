@@ -1,24 +1,25 @@
+import { SignInButton } from "@/components/auth/auth-buttons";
 import { ChatShell } from "@/components/chat/chat-shell";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getCurrentSession } from "@/lib/auth/session";
 
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ authError?: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const [session, params] = await Promise.all([
     getCurrentSession(),
     searchParams,
   ]);
 
-  if (session?.account) {
+  if (session?.user) {
     return (
       <ChatShell
         user={{
-          name: session.account.name,
-          username: session.account.username,
+          name: session.user.name || undefined,
+          username:
+            session.user.email || session.user.name || "Signed-in employee",
         }}
       />
     );
@@ -40,18 +41,13 @@ export default async function Home({
             policies, with document and page citations.
           </p>
 
-          {params.authError && (
+          {params.error && (
             <p className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {params.authError}
+              Sign-in could not be completed. Please try again.
             </p>
           )}
 
-          <Button asChild className="mt-8 h-12 w-full">
-            <a href="/api/auth/login">
-              <MicrosoftLogo />
-              Sign in with Microsoft
-            </a>
-          </Button>
+          <SignInButton />
 
           <p className="mt-4 text-xs leading-5 text-slate-400">
             Fictional demo policies for testing. Confirm employment decisions
@@ -112,16 +108,5 @@ function LogoMark() {
     <div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-700 text-sm font-bold text-white shadow-sm">
       HR
     </div>
-  );
-}
-
-function MicrosoftLogo() {
-  return (
-    <svg viewBox="0 0 21 21" className="h-5 w-5" aria-hidden="true">
-      <path fill="#f25022" d="M1 1h9v9H1z" />
-      <path fill="#7fba00" d="M11 1h9v9h-9z" />
-      <path fill="#00a4ef" d="M1 11h9v9H1z" />
-      <path fill="#ffb900" d="M11 11h9v9h-9z" />
-    </svg>
   );
 }

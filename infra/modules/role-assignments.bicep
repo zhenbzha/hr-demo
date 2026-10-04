@@ -22,6 +22,7 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var searchIndexDataContributorRoleId = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
 var searchServiceContributorRoleId = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
 resource foundryAccount 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = {
   name: foundryAccountName
@@ -72,13 +73,13 @@ resource webFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource webStorageContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, webPrincipalId, storageBlobDataContributorRoleId)
+resource webStorageReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, webPrincipalId, storageBlobDataReaderRoleId)
   scope: storageAccount
   properties: {
     principalId: webPrincipalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
   }
 }
 
@@ -219,6 +220,15 @@ resource ingestionSearchDataContributor 'Microsoft.Authorization/roleAssignments
   properties: {
     principalId: ingestionPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchIndexDataContributorRoleId)
+  }
+}
+
+resource ingestionStorageContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, ingestionPrincipalId, storageBlobDataContributorRoleId)
+  scope: storageAccount
+  properties: {
+    principalId: ingestionPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
   }
 }
 

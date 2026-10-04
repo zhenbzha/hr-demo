@@ -4,36 +4,26 @@ import {
   BookOpen,
   FileText,
   Globe2,
-  LogOut,
   MessageSquarePlus,
   Send,
   Sparkles,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { SignOutButton } from "@/components/auth/auth-buttons";
+import { ReferenceWorkspace } from "@/components/references/reference-workspace";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { type ChatMessage, useChatStream } from "@/hooks/use-chat-stream";
+import type { RichCitation } from "@/lib/references/types";
 
-type Citation = {
-  label: string;
-  location?: string;
-  url?: string;
-};
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  citations?: Citation[];
-  status?: string;
-};
+type Citation = RichCitation;
 
 type ChatUser = {
   name?: string;
@@ -74,13 +64,11 @@ const suggestions = [
 ];
 
 export function ChatShell({ user }: { user: ChatUser }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string>();
-  const abortController = useRef<AbortController | null>(null);
+  const [selectedCitation, setSelectedCitation] = useState<Citation>();
   const messageEnd = useRef<HTMLDivElement | null>(null);
-  const router = useRouter();
+  const { messages, isSending, error, submit, clearConversation } =
+    useChatStream();
 
   const initials = useMemo(() => {
     const source = user.name || user.username;
@@ -92,154 +80,16 @@ export function ChatShell({ user }: { user: ChatUser }) {
       .join("");
   }, [user.name, user.username]);
 
+  const latestMessageText = messages.at(-1)?.text;
   useEffect(() => {
-    if (messages.length > 0) {
+    if (messages.length > 0 && latestMessageText !== undefined) {
       messageEnd.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages.length]);
-
-  async function submit(message: string) {
-    const normalized = message.trim();
-    if (!normalized || isSending) {
-      return;
-    }
-
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      text: normalized,
-    };
-    const assistantId = crypto.randomUUID();
-    const history = [...messages, userMessage];
-
-    setMessages([
-      ...history,
-      {
-        id: assistantId,
-        role: "assistant",
-        text: "",
-        status: "Understanding your question",
-      },
-    ]);
-    setInput("");
-    setError(undefined);
-    setIsSending(true);
-
-    const controller = new AbortController();
-    abortController.current = controller;
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: history.map(({ role, text }) => ({ role, text })),
-        }),
-        signal: controller.signal,
-      });
-
-      if (response.status === 401) {
-        router.push("/api/auth/login");
-        return;
-      }
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        throw new Error(body?.error || "The chat request failed");
-      }
-
-      if (!response.body) {
-        throw new Error("The chat response did not include a stream");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.trim()) {
-            continue;
-          }
-          const event = JSON.parse(line) as
-            | { type: "status"; message: string }
-            | { type: "answer"; answer: string }
-            | { type: "citations"; citations: Citation[] }
-            | { type: "error"; message: string }
-            | { type: "done" };
-
-          if (event.type === "error") {
-            throw new Error(event.message);
-          }
-          if (event.type === "status") {
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === assistantId
-                  ? { ...item, status: event.message }
-                  : item,
-              ),
-            );
-          }
-          if (event.type === "answer") {
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === assistantId
-                  ? { ...item, text: event.answer, status: undefined }
-                  : item,
-              ),
-            );
-          }
-          if (event.type === "citations") {
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === assistantId
-                  ? { ...item, citations: event.citations }
-                  : item,
-              ),
-            );
-          }
-        }
-      }
-    } catch (caught) {
-      if ((caught as Error).name !== "AbortError") {
-        const message =
-          caught instanceof Error ? caught.message : "Unexpected chat error";
-        setError(message);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantId && !item.text
-              ? {
-                  ...item,
-                  text: "I could not complete that request. Please try again.",
-                }
-              : item,
-          ),
-        );
-      }
-    } finally {
-      setIsSending(false);
-      abortController.current = null;
-    }
-  }
-
-  function clearConversation() {
-    abortController.current?.abort();
-    setMessages([]);
-    setError(undefined);
-  }
+  }, [latestMessageText, messages.length]);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
+    setInput("");
     void submit(input);
   }
 
@@ -284,90 +134,89 @@ export function ChatShell({ user }: { user: ChatUser }) {
               <p className="truncate text-xs text-slate-500">{user.username}</p>
             </div>
           </div>
-          <Button variant="outline" asChild className="mt-4 w-full">
-            <a href="/api/auth/logout">
-              <LogOut />
-              Sign out
-            </a>
-          </Button>
+          <SignOutButton />
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b bg-white px-4 lg:hidden">
-          <Brand compact />
-          <Button variant="outline" size="sm" asChild>
-            <a href="/api/auth/logout">Sign out</a>
-          </Button>
-        </header>
+      <ReferenceWorkspace
+        citation={selectedCitation}
+        onClose={() => setSelectedCitation(undefined)}
+      >
+        <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+          <header className="flex h-16 shrink-0 items-center justify-between border-b bg-white px-4 lg:hidden">
+            <Brand compact />
+            <SignOutButton compact />
+          </header>
 
-        <section className="flex min-h-0 flex-1 flex-col bg-slate-50/60">
-          <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-5 py-8 md:px-8">
-              {messages.length === 0 ? (
-                <EmptyState onSelect={(prompt) => void submit(prompt)} />
-              ) : (
-                <div className="space-y-8">
-                  {messages.map((message, index) => (
-                    <Message
-                      key={message.id}
-                      message={message}
-                      isLoading={
-                        isSending &&
-                        message.role === "assistant" &&
-                        index === messages.length - 1 &&
-                        !message.text
-                      }
-                      status={message.status}
-                    />
-                  ))}
-                  <div ref={messageEnd} />
-                </div>
-              )}
+          <section className="flex min-h-0 flex-1 flex-col bg-slate-50/60">
+            <div className="flex-1 overflow-y-auto">
+              <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-5 py-8 md:px-8">
+                {messages.length === 0 ? (
+                  <EmptyState onSelect={(prompt) => void submit(prompt)} />
+                ) : (
+                  <div className="space-y-8">
+                    {messages.map((message, index) => (
+                      <Message
+                        key={message.id}
+                        message={message}
+                        isLoading={
+                          isSending &&
+                          message.role === "assistant" &&
+                          index === messages.length - 1 &&
+                          !message.text
+                        }
+                        status={message.status}
+                        onCitationSelect={setSelectedCitation}
+                      />
+                    ))}
+                    <div ref={messageEnd} />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="shrink-0 px-4 pb-4 pt-2 md:px-7">
-            <form
-              onSubmit={onSubmit}
-              className="mx-auto flex max-w-4xl items-end gap-2 rounded-2xl border bg-white p-2 shadow-lg shadow-slate-900/5 focus-within:border-emerald-500"
-            >
-              <Textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-                rows={1}
-                maxLength={4000}
-                placeholder="Ask an HR-related question"
-                className="max-h-40 min-h-11 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!input.trim() || isSending}
-                className="shrink-0 rounded-full"
-                aria-label="Send message"
+            <div className="shrink-0 px-4 pb-4 pt-2 md:px-7">
+              <form
+                onSubmit={onSubmit}
+                className="mx-auto flex min-h-16 max-w-4xl items-center gap-2 rounded-2xl border bg-white px-3 py-2 shadow-lg shadow-slate-900/5 focus-within:border-emerald-500"
               >
-                <Send />
-              </Button>
-            </form>
-            {error && (
-              <p className="mx-auto mt-2 max-w-4xl text-xs text-rose-600">
-                {error}
+                <Textarea
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                  rows={1}
+                  maxLength={4000}
+                  placeholder="Ask an HR-related question"
+                  className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2 py-3 leading-6 shadow-none focus-visible:ring-0"
+                />
+                <Button
+                  type="submit"
+                  size="icon-lg"
+                  disabled={!input.trim() || isSending}
+                  className="size-10 shrink-0 rounded-full"
+                  aria-label="Send message"
+                >
+                  <Send />
+                </Button>
+              </form>
+              {error && (
+                <p className="mx-auto mt-2 max-w-4xl text-xs text-rose-600">
+                  {error}
+                </p>
+              )}
+              <p className="mx-auto mt-2 max-w-4xl text-center text-[11px] text-slate-400">
+                Verify employment decisions with HR. Answers use fictional demo
+                policies.
               </p>
-            )}
-            <p className="mx-auto mt-2 max-w-4xl text-center text-[11px] text-slate-400">
-              Verify employment decisions with HR. Answers use fictional demo
-              policies.
-            </p>
-          </div>
-        </section>
-      </main>
+            </div>
+          </section>
+        </main>
+      </ReferenceWorkspace>
     </div>
   );
 }
@@ -376,15 +225,17 @@ function Message({
   message,
   isLoading,
   status,
+  onCitationSelect,
 }: {
   message: ChatMessage;
   isLoading: boolean;
   status?: string;
+  onCitationSelect: (citation: Citation) => void;
 }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[82%] rounded-3xl rounded-br-lg bg-emerald-950 px-5 py-3 text-sm leading-6 text-white shadow-sm">
+        <div className="max-w-[82%] rounded-2xl bg-emerald-950 px-4 py-2.5 text-sm leading-6 text-white shadow-sm">
           {message.text}
         </div>
       </div>
@@ -422,6 +273,7 @@ function Message({
                   key={`${citation.label}-${citation.location ?? ""}`}
                   citation={citation}
                   index={index + 1}
+                  onSelect={() => onCitationSelect(citation)}
                 />
               ))}
             </div>
@@ -435,9 +287,11 @@ function Message({
 function SourceCard({
   citation,
   index,
+  onSelect,
 }: {
   citation: Citation;
   index: number;
+  onSelect: () => void;
 }) {
   const content = (
     <div className="flex items-start gap-3">
@@ -455,14 +309,24 @@ function SourceCard({
     </div>
   );
 
-  return citation.url ? (
-    <Card className="p-3 transition hover:border-emerald-300">
-      <a href={citation.url} target="_blank" rel="noreferrer">
+  return (
+    <Card
+      className={`p-0 transition ${
+        citation.pdfUrl && citation.contextUrl
+          ? "hover:border-emerald-300 hover:shadow-sm"
+          : ""
+      }`}
+    >
+      <button
+        type="button"
+        className="w-full p-3 text-left disabled:cursor-default"
+        onClick={onSelect}
+        disabled={!citation.pdfUrl || !citation.contextUrl}
+        aria-label={`Open ${citation.label} ${citation.location || ""}`}
+      >
         {content}
-      </a>
+      </button>
     </Card>
-  ) : (
-    <Card className="p-3">{content}</Card>
   );
 }
 
@@ -499,16 +363,21 @@ function EmptyState({ onSelect }: { onSelect: (prompt: string) => void }) {
           return (
             <Card
               key={suggestion.prompt}
-              className="cursor-pointer p-5 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md"
-              onClick={() => onSelect(suggestion.prompt)}
+              className="p-0 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md"
             >
-              <Icon className="h-5 w-5 text-emerald-700" />
-              <p className="mt-4 text-xs font-semibold uppercase tracking-wider text-emerald-700">
-                {suggestion.label}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">
-                {suggestion.prompt}
-              </p>
+              <button
+                type="button"
+                className="w-full cursor-pointer p-5 text-left"
+                onClick={() => onSelect(suggestion.prompt)}
+              >
+                <Icon className="h-5 w-5 text-emerald-700" />
+                <span className="mt-4 block text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                  {suggestion.label}
+                </span>
+                <span className="mt-2 block text-sm leading-6 text-slate-700">
+                  {suggestion.prompt}
+                </span>
+              </button>
             </Card>
           );
         })}

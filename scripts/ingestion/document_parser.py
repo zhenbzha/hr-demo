@@ -13,7 +13,7 @@ from azure.ai.documentintelligence.models import (
     DocumentTable,
 )
 
-from .page import Page
+from .page import Page, TextLine
 
 
 CONTROL_SECTION_HEADINGS = {
@@ -79,6 +79,38 @@ def remove_document_control(text: str) -> str:
     return "\n".join(kept_lines).strip()
 
 
+def extract_page_lines(page: object) -> list[TextLine]:
+    extracted: list[TextLine] = []
+    for line in getattr(page, "lines", None) or []:
+        content = (line.content or "").strip()
+        normalized = content.lstrip("#").strip()
+        normalized = re.sub(r"^\d+\s*", "", normalized).casefold()
+        if normalized in CONTROL_SECTION_HEADINGS:
+            break
+        if not content or FOOTER_PATTERN.match(content):
+            continue
+        polygon_values = line.polygon or []
+        polygon = (
+            [float(coordinate) for coordinate in polygon_values]
+            if not polygon_values or isinstance(polygon_values[0], (int, float))
+            else [
+                coordinate
+                for point in polygon_values
+                for coordinate in (float(point.x), float(point.y))
+            ]
+        )
+        span = (line.spans or [None])[0]
+        extracted.append(
+            TextLine(
+                text=content,
+                polygon=polygon,
+                span_offset=int(span.offset) if span else 0,
+                span_length=int(span.length) if span else len(content),
+            )
+        )
+    return extracted
+
+
 def analyze_local_pdf(
     *,
     client: DocumentIntelligenceClient,
@@ -137,6 +169,15 @@ def analyze_local_pdf(
                 tables=[
                     table_to_html(table) for table in tables_on_page
                 ],
+                width=float(page.width) if page.width is not None else None,
+                height=float(page.height) if page.height is not None else None,
+                unit=(
+                    getattr(page.unit, "value", str(page.unit))
+                    if page.unit is not None
+                    else None
+                ),
+                angle=float(page.angle) if page.angle is not None else None,
+                lines=extract_page_lines(page),
             )
         )
         output_offset += len(page_text)
