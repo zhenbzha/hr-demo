@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:AZURE_DEV_USER_AGENT = 'microsoft_foundry_skill'
+. (Join-Path $PSScriptRoot 'script_helpers.ps1')
 
 function Invoke-AzdValue {
     param([Parameter(Mandatory)][string] $Name)
@@ -24,18 +25,6 @@ function Invoke-OptionalAzdValue {
         return $value.Trim()
     }
     return $null
-}
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory)][scriptblock] $Script,
-        [Parameter(Mandatory)][string] $Description
-    )
-
-    & $Script
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
-    }
 }
 
 function Invoke-AzRestJson {

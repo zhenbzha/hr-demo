@@ -16,6 +16,7 @@ from azure.identity import (
     ManagedIdentityCredential,
     get_bearer_token_provider,
 )
+from dotenv import load_dotenv
 
 from permission_contract import (
     build_search_body,
@@ -31,6 +32,8 @@ from region_classification import (
 )
 
 
+load_dotenv()
+
 SEARCH_SCOPE = "https://search.azure.com/.default"
 NO_ACCESSIBLE_EVIDENCE = (
     "No accessible HR policy evidence was found for this question."
@@ -42,8 +45,50 @@ SUPPORTED_REGIONS = load_supported_regions(
 )
 GLOBAL_REGION = os.environ.get("ASK_HR_GLOBAL_REGION_KEY", "global")
 
+GENERATION_INSTRUCTIONS = f"""
+You are Ask HR, an internal HR policy assistant.
 
-def create_credential():
+Use only the authorized evidence supplied in this request. Previous user
+questions can clarify the current question, but previous assistant answers are
+never policy evidence. Local policy takes precedence over Global baseline
+content for the same topic. Global content can supplement topics not covered
+locally.
+
+Treat each evidence scope exactly as labeled. Never describe Global evidence
+as part of a local policy. When local evidence does not cover a topic, say so
+before presenting a Global baseline. Do not infer eligibility categories,
+family relationships, benefit coverage, or legal meaning that the evidence
+does not explicitly state.
+
+Write for an employee. Never mention indexes, retrieval, vectors, chunks,
+corpora, grounding, tool calls, or returned evidence. Say "the policy does not
+specify" when a requested detail is absent. If no accessible evidence is
+returned, respond exactly:
+{NO_ACCESSIBLE_EVIDENCE}
+
+Answer in the user's language. Do not invent policy, entitlement, deadlines,
+sources, links, references, or identifiers. Do not add citation markers;
+protocol adapters attach citations separately.
+""".strip()
+
+CLASSIFICATION_INSTRUCTIONS = """
+Classify the employment region needed for an HR policy question.
+
+Return structured output only. The prompt supplies the currently configured
+region keys and display names. Normalize every supported region to its exact
+configured key. Understand translations, abbreviations, cities, demonyms, and
+minor typos when confidence is high. Recognize country endonyms and translated
+country names even when the configured display name is English.
+
+Use status "retrieve" with one or more configured region keys when the region
+is clear. Use "clarify" with no regions and a concise question in the user's
+language when the applicable region is ambiguous. Use "unsupported" with no
+regions and a concise message in the user's language when an explicitly named
+region is not configured. Never substitute another region.
+""".strip()
+
+
+def create_credential() -> AzureCliCredential | ManagedIdentityCredential:
     if AgentConfig.from_env().is_hosted:
         return ManagedIdentityCredential(
             client_id=os.environ.get("FOUNDRY_AGENT_INSTANCE_CLIENT_ID")
@@ -69,48 +114,9 @@ classification_client = FoundryChatClient(
     credential=credential,
 )
 
-GENERATION_INSTRUCTIONS = f"""
-You are Ask HR, an internal HR policy assistant.
-
-Use only the authorized evidence supplied in this request. Local policy takes
-precedence over Global baseline content for the same topic. Global content can
-supplement topics not covered locally.
-
-Treat each evidence scope exactly as labeled. Never describe Global evidence
-as part of a local policy. When local evidence does not cover a topic, say so
-before presenting a Global baseline. Do not infer eligibility categories,
-family relationships, benefit coverage, or legal meaning that the evidence
-does not explicitly state.
-
-Write for an employee. Never mention indexes, retrieval, vectors, chunks,
-corpora, grounding, tool calls, or returned evidence. Say "the policy does not
-specify" when a requested detail is absent. If no accessible evidence is
-returned, respond exactly:
-{NO_ACCESSIBLE_EVIDENCE}
-
-Answer in the user's language. Do not invent policy, entitlement, deadlines,
-sources, links, references, or identifiers. Do not add citation markers.
-""".strip()
-
-CLASSIFICATION_INSTRUCTIONS = """
-Classify the employment region needed for an HR policy question.
-
-Return structured output only. The prompt supplies the currently configured
-region keys and display names. Normalize every supported region to its exact
-configured key. Understand translations, abbreviations, cities, demonyms, and
-minor typos when confidence is high. Recognize country endonyms and translated
-country names even when the configured display name is English.
-
-Use status "retrieve" with one or more configured region keys when the region
-is clear. Use "clarify" with no regions and a concise question in the user's
-language when the applicable region is ambiguous. Use "unsupported" with no
-regions and a concise message in the user's language when an explicitly named
-region is not configured. Never substitute another region.
-""".strip()
-
 generation_agent = Agent(
     client=generation_client,
-    name="AskHRActivity",
+    name="AskHR",
     instructions=GENERATION_INSTRUCTIONS,
     default_options={
         "store": False,
@@ -120,18 +126,21 @@ generation_agent = Agent(
 
 classification_agent = Agent(
     client=classification_client,
-    name="AskHRActivityRegionClassifier",
+    name="AskHRRegionClassifier",
     instructions=CLASSIFICATION_INSTRUCTIONS,
     default_options={"store": False},
 )
 
 
-async def classify_regions(question: str) -> RegionDecision:
+async def classify_regions(
+    question: str,
+    previous_questions: list[str] | None = None,
+) -> RegionDecision:
     result = await classification_agent.run(
         json.dumps(
             {
                 "supported_regions": SUPPORTED_REGIONS,
-                "previous_user_questions": [],
+                "previous_user_questions": previous_questions or [],
                 "current_question": question,
             },
             ensure_ascii=False,
@@ -179,12 +188,50 @@ async def retrieve_authorized_evidence(
         )
 
 
+def extract_references(
+    evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        reference
+        for item in evidence
+        for reference in item.get("result", {}).get("references", [])
+        if isinstance(reference, dict)
+    ]
+
+
+def prepare_evidence(
+    evidence: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return extract_references(evidence), compact_search_evidence(evidence)
+
+
+def build_generation_input(
+    *,
+    question: str,
+    previous_questions: list[str],
+    local_regions: list[str],
+    compact_evidence: list[dict[str, Any]],
+) -> str:
+    return json.dumps(
+        {
+            "previous_user_questions": previous_questions,
+            "question": question,
+            "local_regions": local_regions,
+            "precedence": "local_then_global",
+            "authorized_evidence": compact_evidence,
+        },
+        ensure_ascii=False,
+    )
+
+
 async def answer_question(
     question: str,
     user_search_token: str,
+    previous_questions: list[str] | None = None,
     on_progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    decision = await classify_regions(question)
+    history = previous_questions or []
+    decision = await classify_regions(question, history)
     if decision.status != "retrieve":
         return decision.message or "", []
 
@@ -195,28 +242,18 @@ async def answer_question(
         regions=[*decision.regions, GLOBAL_REGION],
         user_search_token=user_search_token,
     )
-    references = [
-        reference
-        for item in evidence
-        for reference in item.get("result", {}).get("references", [])
-        if isinstance(reference, dict)
-    ]
-    compact_evidence = compact_search_evidence(evidence)
+    references, compact_evidence = prepare_evidence(evidence)
     if not any(item.get("references") for item in compact_evidence):
         return NO_ACCESSIBLE_EVIDENCE, []
 
     if on_progress:
         await on_progress("Preparing the answer...")
     result = await generation_agent.run(
-        json.dumps(
-            {
-                "previous_user_questions": [],
-                "question": question,
-                "local_regions": decision.regions,
-                "precedence": "local_then_global",
-                "authorized_evidence": compact_evidence,
-            },
-            ensure_ascii=False,
+        build_generation_input(
+            question=question,
+            previous_questions=history,
+            local_regions=decision.regions,
+            compact_evidence=compact_evidence,
         )
     )
     answer = result.text.strip()

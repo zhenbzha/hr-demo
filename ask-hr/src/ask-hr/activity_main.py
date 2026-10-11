@@ -20,7 +20,7 @@ from microsoft_agents.hosting.core import (
     TurnState,
 )
 
-import activity_core
+import ask_hr_pipeline
 from activity_authorization import ActivityAuthorization
 from activity_format import format_activity_answer
 
@@ -102,7 +102,7 @@ async def on_invoke(
 @app.message(re.compile(r".*", re.DOTALL))
 async def on_message(
     context: TurnContext,
-    _state: TurnState,
+    state: TurnState,
 ) -> None:
     question = (context.activity.text or "").strip()
     if not question:
@@ -110,10 +110,10 @@ async def on_message(
             MessageFactory.text("Enter an HR policy question.")
         )
         return
-    if len(question) > activity_core.MAX_QUESTION_LENGTH:
+    if len(question) > ask_hr_pipeline.MAX_QUESTION_LENGTH:
         await context.send_activity(
             MessageFactory.text(
-                f"Message must be {activity_core.MAX_QUESTION_LENGTH} "
+                f"Message must be {ask_hr_pipeline.MAX_QUESTION_LENGTH} "
                 "characters or fewer."
             )
         )
@@ -130,6 +130,18 @@ async def on_message(
         activity.id = status.id
         await context.update_activity(activity)
 
+    previous_questions = state.conversation.get_value(
+        "previous_user_questions",
+        lambda: [],
+    )
+    if not isinstance(previous_questions, list):
+        previous_questions = []
+    previous_questions = [
+        item
+        for item in previous_questions
+        if isinstance(item, str) and item.strip()
+    ][-4:]
+
     try:
         token_response = await app.auth.get_token(context, "SEARCH")
         if not token_response or not token_response.token:
@@ -137,12 +149,17 @@ async def on_message(
                 "Unable to acquire an Azure AI Search token for the signed-in user"
             )
 
-        answer, citations = await activity_core.answer_question(
+        answer, citations = await ask_hr_pipeline.answer_question(
             question,
             user_search_token=token_response.token,
+            previous_questions=previous_questions,
             on_progress=update_status,
         )
         await update_status(format_activity_answer(answer, citations))
+        state.conversation.set_value(
+            "previous_user_questions",
+            [*previous_questions, question][-4:],
+        )
     except Exception as error:
         logger.exception("Ask HR Activity turn failed", exc_info=error)
         await update_status(

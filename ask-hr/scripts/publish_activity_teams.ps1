@@ -9,19 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:TEAMS_NO_INTERACTIVE = '1'
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory)][scriptblock] $Script,
-        [Parameter(Mandatory)][string] $Description
-    )
-
-    $output = & $Script
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE."
-    }
-    return $output
-}
+. (Join-Path $PSScriptRoot 'script_helpers.ps1')
 
 if (-not (Test-Path -LiteralPath $PackagePath)) {
     throw "Teams package not found: $PackagePath"
