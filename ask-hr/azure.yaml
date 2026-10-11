@@ -59,6 +59,49 @@ services:
         cpu: "0.5"
         memory: 1Gi
 
+  ask-hr-activity:
+    host: azure.ai.agent
+    project: src/ask-hr
+    language: python
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: activity_main.py
+      dependencyResolution: bundled
+    uses:
+      - ai-project
+    kind: hosted
+    name: ask-hr-activity
+    displayName: Ask HR Activity POC
+    description: Ask HR Activity protocol POC with Teams SSO and delegated Azure AI Search access.
+    protocols:
+      - protocol: activity
+        version: 2.0.0
+    agentEndpoint:
+      protocols:
+        - activity
+      authorizationSchemes:
+        - type: BotServiceRbac
+    env:
+      AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      AZURE_SEARCH_ENDPOINT: ${AZURE_SEARCH_ENDPOINT}
+      AZURE_SEARCH_KNOWLEDGE_BASE_NAME: ${AZURE_SEARCH_KNOWLEDGE_BASE}
+      AZURE_SEARCH_KNOWLEDGE_SOURCE_NAME: ${AZURE_SEARCH_KNOWLEDGE_SOURCE}
+      ASK_HR_WEB_BASE_URL: ${ASK_HR_WEB_BASE_URL}
+      ASK_HR_SUPPORTED_REGIONS_JSON: '{"india":"India","finland":"Finland","hongkong":"Hong Kong"}'
+      ASK_HR_GLOBAL_REGION_KEY: global
+      CONNECTIONSMAP__0__CONNECTION: SERVICE_CONNECTION
+      CONNECTIONSMAP__0__SERVICEURL: "*"
+      AGENTAPPLICATION__USERAUTHORIZATION__HANDLERS__SEARCH__SETTINGS__TITLE: HR policy access
+      AGENTAPPLICATION__USERAUTHORIZATION__HANDLERS__SEARCH__SETTINGS__TEXT: Continue with your Microsoft 365 account
+      AGENTAPPLICATION__USERAUTHORIZATION__HANDLERS__SEARCH__SETTINGS__AZUREBOTOAUTHCONNECTIONNAME: ask-hr-search-sso
+      AGENTAPPLICATION__USERAUTHORIZATION__HANDLERS__SEARCH__SETTINGS__ENABLESSO: "true"
+      AGENTAPPLICATION__USERAUTHORIZATION__AUTO_SIGN_IN: "true"
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
 infra:
   provider: microsoft.foundry
 

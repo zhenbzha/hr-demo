@@ -17,6 +17,7 @@
 **/temp/
 
 ask-hr/src/ask-hr/packages/
+ask-hr/src/ask-hr/activityAppPackage/
 
 **/.pnp
 **/.pnp.*

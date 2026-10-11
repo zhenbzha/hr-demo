@@ -209,27 +209,43 @@ source = { virtual = "." }
 dependencies = [
     { name = "agent-framework-azure-ai-search" },
     { name = "agent-framework-foundry" },
+    { name = "azure-ai-agentserver-activity" },
     { name = "azure-ai-agentserver-core" },
     { name = "azure-ai-agentserver-responses" },
     { name = "azure-identity" },
     { name = "azure-search-documents" },
     { name = "httpx" },
+    { name = "microsoft-agents-activity" },
+    { name = "microsoft-agents-authentication-msal" },
+    { name = "microsoft-agents-hosting-core" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "microsoft-agents-testing" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "agent-framework-azure-ai-search" },
     { name = "agent-framework-foundry" },
+    { name = "azure-ai-agentserver-activity", specifier = "==1.0.0b3" },
     { name = "azure-ai-agentserver-core", specifier = ">=2.1.0,<3" },
     { name = "azure-ai-agentserver-responses", specifier = ">=2.1.0,<3" },
     { name = "azure-identity" },
     { name = "azure-search-documents" },
     { name = "httpx" },
+    { name = "microsoft-agents-activity", specifier = "==1.7.0" },
+    { name = "microsoft-agents-authentication-msal", specifier = "==1.7.0" },
+    { name = "microsoft-agents-hosting-core", specifier = "==1.7.0" },
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "microsoft-agents-testing", specifier = "==1.7.0" }]
 
 [[package]]
 name = "attrs"
@@ -238,6 +254,23 @@ source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
 sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/attrs/26.1/attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32", size = 952055, upload-time = "2026-07-30T17:35:59Z" }
 wheels = [
     { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/attrs/26.1/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-07-23T23:02:58Z" },
+]
+
+[[package]]
+name = "azure-ai-agentserver-activity"
+version = "1.0.0b3"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "azure-ai-agentserver-core" },
+    { name = "microsoft-agents-activity" },
+    { name = "microsoft-agents-authentication-msal" },
+    { name = "microsoft-agents-hosting-core" },
+    { name = "opentelemetry-api" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/azure-ai-agentserver-activity/1b3/azure_ai_agentserver_activity-1.0.0b3.tar.gz", hash = "sha256:0a7e0cc853ffd7d6a2caad7747dbe22223cd41c31d10b152560110373d3b7e4d", size = 55944, upload-time = "2026-08-21T16:19:27Z" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/azure-ai-agentserver-activity/1b3/azure_ai_agentserver_activity-1.0.0b3-py3-none-any.whl", hash = "sha256:e0f1cde51f6710a10ad78301350eb82aa013b8d88bfe9bef99b608d25746411a", size = 31899, upload-time = "2026-08-21T22:25:39Z" },
 ]
 
 [[package]]
@@ -818,7 +851,7 @@ wheels = [
 name = "httpx2-jsfetch"
 version = "1.0"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
-sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/httpx2-jsfetch/1/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-08-07T00:13:07Z" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/httpx2-jsfetch/1/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-10-05T01:12:25Z" }
 wheels = [
     { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/httpx2-jsfetch/1/httpx2_jsfetch-1.0-py3-none-any.whl", hash = "sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32", size = 6382, upload-time = "2026-08-16T09:43:07Z" },
 ]
@@ -913,6 +946,65 @@ wheels = [
     { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/jiter/0.16/jiter-0.16.0-cp314-cp314t-win32.whl", hash = "sha256:de5ba8763e56b793561f43bed197c9ea55776daa5e9a6b91eed68a909bc9cdbf", size = 206523, upload-time = "2026-07-30T16:06:58Z" },
     { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/jiter/0.16/jiter-0.16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:b8a3f9a6008048fe9def7bf465180564a6e458047d2ce499149cfbe73c3ae9db", size = 200366, upload-time = "2026-07-30T16:08:36Z" },
     { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/jiter/0.16/jiter-0.16.0-cp314-cp314t-win_arm64.whl", hash = "sha256:0fa25b09b13075c46f5bc174f2690525a925a4fc2f7c82969a2bbabff22386ce", size = 190516, upload-time = "2026-07-30T16:07:40Z" },
+]
+
+[[package]]
+name = "microsoft-agents-activity"
+version = "1.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.7/microsoft_agents_activity-1.7.0.tar.gz", hash = "sha256:bb09bb14257ba8782decd7fb41447b96a6afb76ac138597972fab3bc61ba7ace", size = 74266, upload-time = "2026-09-17T22:09:44Z" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.7/microsoft_agents_activity-1.7.0-py3-none-any.whl", hash = "sha256:57cb7ab5cb1705f9474f85b3b6e1258c54dc0ddb0985e99c07ece7a9c216b5ca", size = 150034, upload-time = "2026-09-18T00:19:03Z" },
+]
+
+[[package]]
+name = "microsoft-agents-authentication-msal"
+version = "1.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "microsoft-agents-hosting-core" },
+    { name = "msal" },
+    { name = "requests" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.7/microsoft_agents_authentication_msal-1.7.0.tar.gz", hash = "sha256:4baf5c25c33a73c9766a6ab31a1c8ff13fe8fe0bee11a4baa66241621e2eb3a8", size = 14895, upload-time = "2026-09-17T22:09:46Z" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.7/microsoft_agents_authentication_msal-1.7.0-py3-none-any.whl", hash = "sha256:9b97d311e370f07e9638a0001ce1f00699556594917f323974b4b446b6b417c9", size = 14245, upload-time = "2026-09-18T01:40:42Z" },
+]
+
+[[package]]
+name = "microsoft-agents-hosting-core"
+version = "1.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "microsoft-agents-activity" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "pyjwt" },
+    { name = "python-dotenv" },
+    { name = "yarl" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.7/microsoft_agents_hosting_core-1.7.0.tar.gz", hash = "sha256:543e36ce55decde76a122e34b112794904b6dff73c4b63415f8ee69c331c4fca", size = 157460, upload-time = "2026-10-05T04:52:12Z" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.7/microsoft_agents_hosting_core-1.7.0-py3-none-any.whl", hash = "sha256:055260f8621a9a19dbcb80e587cdf034ebccffc30b2a0f1e7c9f989ad81dbdae", size = 230443, upload-time = "2026-09-18T00:19:01Z" },
+]
+
+[[package]]
+name = "microsoft-agents-testing"
+version = "1.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+dependencies = [
+    { name = "microsoft-agents-hosting-core" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-testing/1.7/microsoft_agents_testing-1.7.0.tar.gz", hash = "sha256:6c24b751dc6e242fef6951429649410cd845eeeae77a9527ccc3925129c6cb22", size = 16183, upload-time = "2026-09-17T22:09:57Z" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-testing/1.7/microsoft_agents_testing-1.7.0-py3-none-any.whl", hash = "sha256:ff3af8b98290b05fb8ec4a461bb040a9d05b1a96ff5b8baad358c79c0ee6983d", size = 17788, upload-time = "2026-10-09T10:54:10Z" },
 ]
 
 [[package]]

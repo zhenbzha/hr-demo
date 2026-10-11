@@ -7,10 +7,19 @@ dependencies = [
     "agent-framework-azure-ai-search",
     "agent-framework-foundry",
     "azure-ai-agentserver-core>=2.1.0,<3",
+    "azure-ai-agentserver-activity==1.0.0b3",
     "azure-ai-agentserver-responses>=2.1.0,<3",
     "azure-identity",
     "azure-search-documents",
     "httpx",
+    "microsoft-agents-activity==1.7.0",
+    "microsoft-agents-authentication-msal==1.7.0",
+    "microsoft-agents-hosting-core==1.7.0",
     "pydantic",
     "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "microsoft-agents-testing==1.7.0",
 ]

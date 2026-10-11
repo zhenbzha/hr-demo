@@ -2,12 +2,6 @@ $ErrorActionPreference = 'Stop'
 $env:AZURE_DEV_USER_AGENT = 'microsoft_foundry_skill'
 
 $values = azd env get-values --output json | ConvertFrom-Json
-$agent = azd ai agent show ask-hr --output json | ConvertFrom-Json
-
-$principalId = $agent.instance_identity.principal_id
-if (-not $principalId) {
-    throw 'The deployed Ask HR agent has no instance identity principal ID.'
-}
 
 $scope = @(
     '/subscriptions/', $values.AZURE_SUBSCRIPTION_ID,
@@ -16,19 +10,34 @@ $scope = @(
     $values.AZURE_SEARCH_SERVICE_NAME
 ) -join ''
 
-$existing = az role assignment list `
-    --assignee-object-id $principalId `
-    --scope $scope `
-    --query "[?roleDefinitionName=='Search Index Data Reader'].id | [0]" `
-    --output tsv
+foreach ($agentName in @('ask-hr', 'ask-hr-activity')) {
+    $agentJson = azd ai agent show $agentName --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $agentJson) {
+        continue
+    }
+    $agent = $agentJson | ConvertFrom-Json
+    $principalId = $agent.instance_identity.principal_id
+    if (-not $principalId) {
+        throw "The deployed $agentName agent has no instance identity principal ID."
+    }
 
-if (-not $existing) {
-    az role assignment create `
+    $existing = az role assignment list `
         --assignee-object-id $principalId `
-        --assignee-principal-type ServicePrincipal `
-        --role 'Search Index Data Reader' `
         --scope $scope `
-        --output none
-}
+        --query "[?roleDefinitionName=='Search Index Data Reader'].id | [0]" `
+        --output tsv
 
-Write-Host "Ask HR agent identity has Search Index Data Reader on $scope"
+    if (-not $existing) {
+        az role assignment create `
+            --assignee-object-id $principalId `
+            --assignee-principal-type ServicePrincipal `
+            --role 'Search Index Data Reader' `
+            --scope $scope `
+            --output none
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to grant Search Index Data Reader to $agentName."
+        }
+    }
+
+    Write-Host "$agentName identity has Search Index Data Reader on $scope"
+}
