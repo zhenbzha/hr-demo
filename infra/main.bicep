@@ -75,7 +75,7 @@ module foundry './modules/foundry.bicep' = {
     accountName: 'aif-askhr-${resourceToken}'
     classifierDeploymentName: 'ask-hr-gpt-4.1-mini'
     generationDeploymentName: 'ask-hr-gpt-6.1-sol'
-    generationModelCapacity: 10
+    generationModelCapacity: 100
     location: location
     projectName: 'ask-hr-project'
     tags: tags

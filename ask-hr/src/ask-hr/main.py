@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import Any, cast
 
+import ask_hr_pipeline
 from azure.ai.agentserver.responses import (
     CreateResponse,
     ResponseContext,
@@ -14,10 +15,7 @@ from azure.ai.agentserver.responses import (
     ResponsesServerOptions,
 )
 from azure.ai.agentserver.responses.models import Annotation, UrlCitationBody
-
-import ask_hr_pipeline
 from permission_contract import require_security_context
-
 
 app = ResponsesAgentServerHost(
     options=ResponsesServerOptions(default_fetch_history_count=12),
@@ -86,32 +84,20 @@ async def handle_response(
             text_content = message.add_text_content()
             yield text_content.emit_added()
 
-            answer_parts: list[str] = []
-            async for update in ask_hr_pipeline.generation_agent.run(
+            answer_stream = ask_hr_pipeline.stream_answer(
                 ask_hr_pipeline.build_generation_input(
                     question=question,
                     previous_questions=previous_questions,
                     local_regions=decision.regions,
                     compact_evidence=compact_evidence,
                 ),
-                stream=True,
-            ):
-                delta = update.text
-                if not delta:
-                    continue
-                answer_parts.append(delta)
+                references,
+            )
+            async for delta in answer_stream:
                 yield text_content.emit_delta(delta)
 
-            answer = "".join(answer_parts).strip()
-            if not answer:
-                raise RuntimeError(
-                    "The generation model returned an empty answer"
-                )
-            citations = (
-                []
-                if answer == ask_hr_pipeline.NO_ACCESSIBLE_EVIDENCE
-                else ask_hr_pipeline.build_citations(references)[:4]
-            )
+            answer, references = await answer_stream.get_final_response()
+            citations = ask_hr_pipeline.build_citations(references)
             annotations = build_response_annotations(answer, citations)
             yield text_content.emit_text_done(answer)
             for annotation in annotations:

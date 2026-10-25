@@ -83,6 +83,30 @@ class PermissionContractTests(unittest.TestCase):
             "region eq 'india'",
         )
 
+    def test_search_reranks_passages_without_llm_query_planning(self) -> None:
+        body = permission_contract.build_search_body(
+            "How much annual leave applies?",
+            "finland",
+        )
+        self.assertEqual(
+            body["knowledgeSourceParams"][0]["resultsProcessing"],
+            "rerank",
+        )
+        self.assertEqual(
+            body["knowledgeSourceParams"][0]["rerankerThreshold"],
+            1.5,
+        )
+        self.assertEqual(
+            body["retrievalReasoningEffort"],
+            {"kind": "minimal"},
+        )
+
+    def test_search_uses_knowledge_base_output_budgets(self) -> None:
+        body = permission_contract.build_search_body("Question", "finland")
+        self.assertNotIn("maxOutputDocuments", body)
+        self.assertNotIn("maxOutputSizeInTokens", body)
+        self.assertNotIn("maxOutputSize", body)
+
     def test_search_endpoint_is_fixed_https_origin(self) -> None:
         with patch.dict(
             os.environ,
@@ -99,9 +123,8 @@ class PermissionContractTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {"AZURE_SEARCH_ENDPOINT": "http://malicious.example"},
-        ):
-            with self.assertRaisesRegex(ValueError, "fixed HTTPS origin"):
-                permission_contract.validated_search_endpoint()
+        ), self.assertRaisesRegex(ValueError, "fixed HTTPS origin"):
+            permission_contract.validated_search_endpoint()
 
     def test_compact_evidence_excludes_activity_and_tokens(self) -> None:
         compact = permission_contract.compact_search_evidence(
@@ -113,6 +136,7 @@ class PermissionContractTests(unittest.TestCase):
                         "references": [
                             {
                                 "sourceData": {
+                                    "chunk_id": "india-leave-2",
                                     "document_title": "India Leave",
                                     "region": "india",
                                     "page_start": 2,
@@ -132,6 +156,68 @@ class PermissionContractTests(unittest.TestCase):
         self.assertEqual(
             compact[0]["references"][0]["content"],
             "Authorized policy text",
+        )
+        self.assertEqual(compact[0]["references"][0]["source_id"], "india-leave-2")
+
+    def test_policy_content_without_a_source_id_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source ID"):
+            permission_contract.compact_search_evidence(
+                [
+                    {
+                        "scope": "finland",
+                        "result": {
+                            "references": [
+                                {"sourceData": {"chunk_text": "Policy text"}}
+                            ]
+                        },
+                    }
+                ]
+            )
+
+    def test_compact_evidence_keeps_all_valid_chunks_in_each_scope(self) -> None:
+        evidence = []
+        expected = []
+        for region, count in (("finland", 12), ("global", 6)):
+            references = [
+                {
+                    "sourceData": {
+                        "chunk_id": f"{region}-{index}",
+                        "document_title": f"{region} policy",
+                        "region": region,
+                        "page_start": index + 1,
+                        "page_end": index + 1,
+                        "chunk_text": f"Policy content {index}",
+                    }
+                }
+                for index in range(count)
+            ]
+            evidence.append(
+                {
+                    "scope": region,
+                    "result": {
+                        "references": [
+                            None,
+                            *references[:5],
+                            {"sourceData": {"chunk_text": ""}},
+                            *references[5:],
+                        ]
+                    },
+                }
+            )
+            expected.append(
+                [f"Policy content {index}" for index in range(count)]
+            )
+
+        compact = permission_contract.compact_search_evidence(evidence)
+        self.assertEqual(
+            [group["scope"] for group in compact], ["finland", "global"]
+        )
+        self.assertEqual(
+            [
+                [reference["content"] for reference in group["references"]]
+                for group in compact
+            ],
+            expected,
         )
 
 

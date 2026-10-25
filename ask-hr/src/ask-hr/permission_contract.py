@@ -67,7 +67,6 @@ def build_search_body(question: str, region: str) -> dict[str, Any]:
         "intents": [{"type": "semantic", "search": question}],
         "outputMode": "extractiveData",
         "retrievalReasoningEffort": {"kind": "minimal"},
-        "maxOutputDocuments": 5,
         "includeActivity": True,
         "knowledgeSourceParams": [
             {
@@ -79,7 +78,8 @@ def build_search_body(question: str, region: str) -> dict[str, Any]:
                 "includeReferences": True,
                 "includeReferenceSourceData": True,
                 "alwaysQuerySource": True,
-                "resultsProcessing": "none",
+                "resultsProcessing": "rerank",
+                "rerankerThreshold": 1.5,
             }
         ],
     }
@@ -98,7 +98,7 @@ def compact_search_evidence(
         if not isinstance(references, list):
             continue
         scoped_evidence = []
-        for reference in references[:5]:
+        for reference in references:
             if not isinstance(reference, dict):
                 continue
             source = reference.get("sourceData")
@@ -107,8 +107,12 @@ def compact_search_evidence(
             content = source.get("chunk_text")
             if not isinstance(content, str) or not content.strip():
                 continue
+            source_id = source.get("chunk_id")
+            if not isinstance(source_id, str) or not source_id:
+                raise ValueError("Policy evidence is missing its source ID")
             scoped_evidence.append(
                 {
+                    "source_id": source_id,
                     "document_title": source.get("document_title"),
                     "region": source.get("region"),
                     "page_start": source.get("page_start"),

@@ -1,0 +1,12 @@
+.env
+.env.*
+.venv/
+.foundry/
+.agent_configs/
+.azure/
+.git/
+__pycache__/
+*.py[cod]
+/activityAppPackage/
+/scripts/
+/eval.yaml

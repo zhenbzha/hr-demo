@@ -1,1047 +1,313 @@
 #!/usr/bin/env python3
-"""Index local HR PDFs into Azure AI Search with layout-aware citations."""
+"""Ingest policy PDFs into ADLS Gen2 and a dedicated Azure AI Search index."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import re
-import shutil
-import subprocess
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from datetime import datetime, timezone
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.core.credentials import TokenCredential
+from azure.identity import AzureCliCredential
+from ingestion.analysis_cache import load_or_analyze_pages
+from ingestion.document_parser import ANALYSIS_API_VERSION
+from ingestion.manifest import load_manifest
+from ingestion.search_index import (
+    create_index,
+    embed_documents,
+    synchronize_documents,
+    validate_index,
+)
+from ingestion.search_schema import (
+    DEFAULT_INDEX_NAME,
+    DEFAULT_VECTOR_DIMENSIONS,
+    index_schema,
+    validate_dimensions,
+)
+from ingestion.semantic import build_search_documents
+from ingestion.storage import annotation_payload, publish_manifest, upload_adls_content
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-OPENAI_API_VERSION = "2024-10-21"
-SEARCH_API_VERSION = "2026-08-01-preview"
-DEFAULT_INDEX_NAME = "ask-hr-docs"
-DEFAULT_VECTOR_DIMENSIONS = 1024
-SUPPORTED_REGIONS = {"global", "india", "finland", "hongkong"}
-SUPPORTED_LANGUAGES = {"en", "fi", "zh-Hant"}
-REQUIRED_MANIFEST_FIELDS = {
-    "region",
-    "language",
-    "documentId",
-    "policyTopic",
-    "isActive",
-    "version",
-    "effectiveDate",
-    "reviewDate",
-    "name",
-    "localPath",
-    "sourceUrl",
-    "sha256",
-}
-
-
-def run_command(command: list[str]) -> str:
-    result = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({result.returncode}): {' '.join(command)}\n"
-            f"{result.stderr.strip()}"
+def _add_service_arguments(parser: argparse.ArgumentParser) -> None:
+    for option, variable in (
+        ("document-intelligence-endpoint", "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"),
+        ("openai-endpoint", "AZURE_OPENAI_ENDPOINT"),
+        ("embedding-deployment", "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
+        ("search-endpoint", "AZURE_SEARCH_ENDPOINT"),
+        ("index-name", "AZURE_SEARCH_INDEX_NAME"),
+        ("storage-dfs-endpoint", "AZURE_STORAGE_DFS_ENDPOINT"),
+        ("storage-file-system", "AZURE_STORAGE_FILE_SYSTEM"),
+    ):
+        parser.add_argument(
+            f"--{option}", default=os.environ.get(variable), help=f"Or set {variable}."
         )
-    return result.stdout.strip()
-
-
-def executable(name: str) -> str:
-    path = shutil.which(f"{name}.cmd") or shutil.which(name)
-    if not path:
-        raise FileNotFoundError(f"{name} was not found on PATH")
-    return path
-
-
-def azd_values() -> dict[str, str]:
-    output = run_command(
-        [executable("azd"), "env", "get-values", "--output", "json"]
-    )
-    parsed = json.loads(output)
-    return {str(key): str(value) for key, value in parsed.items()}
-
-
-def access_token(scope: str) -> str:
-    return run_command(
-        [
-            executable("az"),
-            "account",
-            "get-access-token",
-            "--scope",
-            scope,
-            "--query",
-            "accessToken",
-            "-o",
-            "tsv",
-        ]
-    )
-
-
-def request(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    json_body: Any | None = None,
-    raw_body: bytes | None = None,
-    timeout: int = 180,
-    retries: int = 4,
-) -> tuple[int, dict[str, str], bytes]:
-    request_headers = dict(headers or {})
-    body = raw_body
-    if json_body is not None:
-        body = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
-        request_headers.setdefault("Content-Type", "application/json")
-
-    for attempt in range(1, retries + 1):
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers=request_headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                return (
-                    response.status,
-                    {
-                        key.lower(): value
-                        for key, value in response.headers.items()
-                    },
-                    response.read(),
-                )
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            if exc.code in {429, 500, 502, 503, 504} and attempt < retries:
-                retry_after = exc.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after else attempt * 5
-                time.sleep(delay)
-                continue
-            raise RuntimeError(
-                f"{method} {url} failed with HTTP {exc.code}: {error_body}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            if attempt < retries:
-                time.sleep(attempt * 5)
-                continue
-            raise RuntimeError(f"{method} {url} failed: {exc}") from exc
-
-    raise RuntimeError(f"{method} {url} exhausted its retry budget")
-
-
-def request_json(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    json_body: Any | None = None,
-    raw_body: bytes | None = None,
-    timeout: int = 180,
-    retries: int = 4,
-) -> tuple[int, dict[str, str], dict[str, Any]]:
-    status, response_headers, body = request(
-        method,
-        url,
-        headers=headers,
-        json_body=json_body,
-        raw_body=raw_body,
-        timeout=timeout,
-        retries=retries,
-    )
-    payload = json.loads(body.decode("utf-8-sig")) if body else {}
-    return status, response_headers, payload
-
-
-def clean_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def content_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def deterministic_id(parent_id: str, ordinal: int, value: str) -> str:
-    material = f"{parent_id}|{ordinal}|{content_hash(value)}"
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:40]
-
-
-def extract_heading(text: str, fallback: str) -> str:
-    headings = re.findall(
-        r"(?m)^#{1,6}\s+(.+?)\s*$",
-        text,
-    )
-    return clean_text(headings[-1]) if headings else fallback
-
-
-def load_or_analyze_pages(
-    *,
-    client: Any,
-    path: Path,
-    output_path: Path,
-    reuse_analysis: bool,
-) -> list[Any]:
-    from ingestion.document_parser import (
-        analyze_local_pdf,
-        remove_document_control,
-    )
-    from ingestion.page import Page, TextLine
-
-    if reuse_analysis and output_path.exists():
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        pages = [
-            Page(
-                **{
-                    **item,
-                    "lines": [
-                        TextLine(**line) for line in item.get("lines", [])
-                    ],
-                }
-            )
-            for item in payload
-        ]
-        for page in pages:
-            page.text = remove_document_control(page.text)
-        return [page for page in pages if page.text]
-
-    pages = analyze_local_pdf(client=client, path=path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(
-            [
-                {
-                    "page_num": page.page_num,
-                    "offset": page.offset,
-                    "text": page.text,
-                    "tables": page.tables,
-                    "width": page.width,
-                    "height": page.height,
-                    "unit": page.unit,
-                    "angle": page.angle,
-                    "lines": [
-                        {
-                            "text": line.text,
-                            "polygon": line.polygon,
-                            "span_offset": line.span_offset,
-                            "span_length": line.span_length,
-                        }
-                        for line in page.lines
-                    ],
-                }
-                for page in pages
-            ],
-            ensure_ascii=False,
-            indent=2,
+    parser.add_argument(
+        "--embedding-dimensions",
+        type=int,
+        default=os.environ.get(
+            "AZURE_OPENAI_EMBEDDING_DIMENSIONS", str(DEFAULT_VECTOR_DIMENSIONS)
         ),
-        encoding="utf-8",
-    )
-    return pages
-
-
-def build_sdk_documents(
-    *,
-    pages: list[Any],
-    manifest_item: dict[str, Any],
-) -> list[dict[str, Any]]:
-    from ingestion.textsplitter import SentenceTextSplitter
-
-    parent_id = hashlib.sha256(
-        manifest_item["sourceUrl"].encode("utf-8")
-    ).hexdigest()[:24]
-    title = Path(manifest_item["name"]).stem.replace("_", " ")
-    splitter = SentenceTextSplitter(max_tokens_per_section=500)
-    documents: list[dict[str, Any]] = []
-
-    for ordinal, chunk in enumerate(splitter.split_pages(pages)):
-        text = chunk.text.strip()
-        if not text:
-            continue
-        page_number = int(chunk.page_num) + 1
-        documents.append(
-            base_document(
-                manifest_item=manifest_item,
-                parent_id=parent_id,
-                ordinal=ordinal,
-                text=text,
-                heading_text=extract_heading(text, title),
-                pages=[page_number],
-            )
-        )
-    return documents
-
-
-def base_document(
-    *,
-    manifest_item: dict[str, Any],
-    parent_id: str,
-    ordinal: int,
-    text: str,
-    heading_text: str,
-    pages: list[int],
-) -> dict[str, Any]:
-    return {
-        "chunk_id": deterministic_id(parent_id, ordinal, text),
-        "document_id": manifest_item["documentId"],
-        "document_title": Path(manifest_item["name"]).stem.replace("_", " "),
-        "region": manifest_item["region"],
-        "language": manifest_item["language"],
-        "policy_topic": manifest_item["policyTopic"],
-        "version": manifest_item["version"],
-        "source_uri": manifest_item["sourceUrl"],
-        "document_path": manifest_item["documentPath"],
-        "annotation_path": manifest_item["annotationPath"],
-        "heading_text": heading_text,
-        "chunk_text": text,
-        "page_start": min(pages) if pages else None,
-        "page_end": max(pages) if pages else None,
-    }
-
-
-def embedding_url(endpoint: str, deployment: str) -> str:
-    encoded_deployment = urllib.parse.quote(deployment, safe="")
-    return (
-        f"{endpoint.rstrip('/')}/openai/deployments/{encoded_deployment}/"
-        f"embeddings?api-version={OPENAI_API_VERSION}"
     )
 
 
-def embed_documents(
-    *,
-    documents: list[dict[str, Any]],
-    endpoint: str,
-    deployment: str,
-    dimensions: int,
-) -> None:
-    token = access_token("https://cognitiveservices.azure.com/.default")
-    url = embedding_url(endpoint, deployment)
-    batch_size = 16
-
-    for batch_start in range(0, len(documents), batch_size):
-        batch = documents[batch_start : batch_start + batch_size]
-        _, _, result = request_json(
-            "POST",
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            json_body={
-                "input": [document["chunk_text"] for document in batch],
-                "dimensions": dimensions,
-            },
-            timeout=180,
-        )
-        vectors = sorted(result["data"], key=lambda item: item["index"])
-        if len(vectors) != len(batch):
-            raise RuntimeError("Embedding response count did not match input")
-        for document, vector in zip(batch, vectors, strict=True):
-            embedding = vector["embedding"]
-            if len(embedding) != dimensions:
-                raise RuntimeError(
-                    f"Expected {dimensions} dimensions, got {len(embedding)}"
-                )
-            document["chunk_vector"] = embedding
-        print(
-            f"Embedded {min(batch_start + batch_size, len(documents))}/"
-            f"{len(documents)} chunks"
-        )
-
-
-def index_schema(
-    *,
-    index_name: str,
-    openai_endpoint: str,
-    embedding_deployment: str,
-    dimensions: int,
-) -> dict[str, Any]:
-    return {
-        "name": index_name,
-        "fields": [
-            {
-                "name": "chunk_id",
-                "type": "Edm.String",
-                "key": True,
-                "filterable": True,
-            },
-            {
-                "name": "document_id",
-                "type": "Edm.String",
-                "retrievable": True,
-                "filterable": True,
-                "facetable": True,
-            },
-            {
-                "name": "document_title",
-                "type": "Edm.String",
-                "searchable": True,
-                "retrievable": True,
-                "filterable": True,
-            },
-            {
-                "name": "region",
-                "type": "Edm.String",
-                "retrievable": True,
-                "filterable": True,
-                "facetable": True,
-            },
-            {
-                "name": "language",
-                "type": "Edm.String",
-                "retrievable": True,
-                "filterable": True,
-            },
-            {
-                "name": "policy_topic",
-                "type": "Edm.String",
-                "searchable": True,
-                "retrievable": True,
-                "filterable": True,
-                "facetable": True,
-            },
-            {
-                "name": "version",
-                "type": "Edm.String",
-                "retrievable": True,
-            },
-            {"name": "source_uri", "type": "Edm.String", "retrievable": True},
-            {
-                "name": "document_path",
-                "type": "Edm.String",
-                "retrievable": True,
-            },
-            {
-                "name": "annotation_path",
-                "type": "Edm.String",
-                "retrievable": True,
-            },
-            {
-                "name": "heading_text",
-                "type": "Edm.String",
-                "searchable": True,
-                "retrievable": True,
-            },
-            {
-                "name": "chunk_text",
-                "type": "Edm.String",
-                "searchable": True,
-                "retrievable": True,
-                "analyzer": "standard.lucene",
-            },
-            {
-                "name": "chunk_vector",
-                "type": "Collection(Edm.Single)",
-                "searchable": True,
-                "retrievable": False,
-                "stored": False,
-                "dimensions": dimensions,
-                "vectorSearchProfile": "ask-hr-vector-profile",
-            },
-            {
-                "name": "page_start",
-                "type": "Edm.Int32",
-                "retrievable": True,
-            },
-            {
-                "name": "page_end",
-                "type": "Edm.Int32",
-                "retrievable": True,
-            },
-        ],
-        "vectorSearch": {
-            "algorithms": [
-                {
-                    "name": "ask-hr-hnsw",
-                    "kind": "hnsw",
-                    "hnswParameters": {
-                        "metric": "cosine",
-                        "m": 4,
-                        "efConstruction": 400,
-                        "efSearch": 500,
-                    },
-                }
-            ],
-            "profiles": [
-                {
-                    "name": "ask-hr-vector-profile",
-                    "algorithm": "ask-hr-hnsw",
-                    "vectorizer": "ask-hr-openai-vectorizer",
-                }
-            ],
-            "vectorizers": [
-                {
-                    "name": "ask-hr-openai-vectorizer",
-                    "kind": "azureOpenAI",
-                    "azureOpenAIParameters": {
-                        "resourceUri": openai_endpoint,
-                        "deploymentId": embedding_deployment,
-                        "modelName": "text-embedding-3-large",
-                        "authIdentity": None,
-                    },
-                }
-            ],
-        },
-        "semantic": {
-            "defaultConfiguration": "ask-hr-semantic",
-            "configurations": [
-                {
-                    "name": "ask-hr-semantic",
-                    "prioritizedFields": {
-                        "titleField": {"fieldName": "document_title"},
-                        "prioritizedContentFields": [
-                            {"fieldName": "chunk_text"}
-                        ],
-                        "prioritizedKeywordsFields": [
-                            {"fieldName": "heading_text"},
-                            {"fieldName": "policy_topic"},
-                        ],
-                    },
-                }
-            ],
-        },
-    }
-
-
-def search_headers() -> dict[str, str]:
-    return {
-        "Authorization": (
-            "Bearer " + access_token("https://search.azure.com/.default")
-        )
-    }
-
-
-def create_index(
-    *,
-    endpoint: str,
-    index_name: str,
-    schema: dict[str, Any],
-    recreate: bool,
-) -> None:
-    url = (
-        f"{endpoint.rstrip('/')}/indexes/{urllib.parse.quote(index_name)}"
-        f"?api-version={SEARCH_API_VERSION}"
-    )
-    headers = search_headers()
-    if recreate:
-        try:
-            request_json("DELETE", url, headers=headers)
-        except RuntimeError as exc:
-            if "HTTP 404" not in str(exc):
-                raise
-    request_json("PUT", url, headers=headers, json_body=schema)
-
-
-def upload_documents(
-    *,
-    endpoint: str,
-    index_name: str,
-    documents: list[dict[str, Any]],
-) -> None:
-    url = (
-        f"{endpoint.rstrip('/')}/indexes/{urllib.parse.quote(index_name)}/"
-        f"docs/index?api-version={SEARCH_API_VERSION}"
-    )
-    headers = search_headers()
-    batch_size = 100
-    for batch_start in range(0, len(documents), batch_size):
-        batch = documents[batch_start : batch_start + batch_size]
-        _, _, result = request_json(
-            "POST",
-            url,
-            headers=headers,
-            json_body={
-                "value": [
-                    {"@search.action": "mergeOrUpload", **document}
-                    for document in batch
-                ]
-            },
-        )
-        failures = [
-            item
-            for item in result.get("value", [])
-            if not item.get("status")
-        ]
-        if failures:
-            raise RuntimeError(
-                "Search indexing failed:\n"
-                + json.dumps(failures, ensure_ascii=False, indent=2)
-            )
-        print(
-            f"Uploaded {min(batch_start + batch_size, len(documents))}/"
-            f"{len(documents)} chunks"
-        )
-
-
-def validate_index(
-    *,
-    endpoint: str,
-    index_name: str,
-    openai_endpoint: str,
-    embedding_deployment: str,
-    dimensions: int,
-    expected_regions: set[str],
-    expected_document_ids: set[str],
-) -> dict[str, Any]:
-    token = access_token("https://cognitiveservices.azure.com/.default")
-    _, _, embedding_result = request_json(
-        "POST",
-        embedding_url(openai_endpoint, embedding_deployment),
-        headers={"Authorization": f"Bearer {token}"},
-        json_body={
-            "input": ["What leave and holiday policies apply?"],
-            "dimensions": dimensions,
-        },
-    )
-    vector = embedding_result["data"][0]["embedding"]
-    url = (
-        f"{endpoint.rstrip('/')}/indexes/{urllib.parse.quote(index_name)}/"
-        f"docs/search?api-version={SEARCH_API_VERSION}"
-    )
-    _, _, result = request_json(
-        "POST",
-        url,
-        headers=search_headers(),
-        json_body={
-            "search": "leave holiday policy",
-            "queryType": "semantic",
-            "semanticConfiguration": "ask-hr-semantic",
-            "vectorQueries": [
-                {
-                    "kind": "vector",
-                    "vector": vector,
-                    "fields": "chunk_vector",
-                    "k": 5,
-                }
-            ],
-            "select": (
-                "chunk_id,document_id,document_title,region,language,"
-                "policy_topic,heading_text,"
-                "page_start,page_end,source_uri,document_path,annotation_path"
-            ),
-            "top": 5,
-            "count": True,
-        },
-    )
-    if not result.get("value"):
-        raise RuntimeError("Search validation returned no documents")
-
-    _, _, facets = request_json(
-        "POST",
-        url,
-        headers=search_headers(),
-        json_body={
-            "search": "*",
-            "facets": [
-                "region,count:20",
-                "document_id,count:100",
-            ],
-            "top": 0,
-            "count": True,
-        },
-    )
-    facet_values = facets.get("@search.facets", {})
-    actual_regions = {
-        str(item["value"])
-        for item in facet_values.get("region", [])
-    }
-    actual_document_ids = {
-        str(item["value"])
-        for item in facet_values.get("document_id", [])
-    }
-    if actual_regions != expected_regions:
-        raise RuntimeError(
-            "Region facets did not match the manifest: "
-            f"expected {sorted(expected_regions)}, got {sorted(actual_regions)}"
-        )
-    if actual_document_ids != expected_document_ids:
-        raise RuntimeError(
-            "Indexed document IDs did not match the manifest: "
-            f"expected {sorted(expected_document_ids)}, "
-            f"got {sorted(actual_document_ids)}"
-        )
-    return {"hybridQuery": result, "facets": facets}
-
-
-def annotation_payload(
-    *,
-    manifest_item: dict[str, Any],
-    pages: list[Any],
-) -> dict[str, Any]:
-    return {
-        "documentId": manifest_item["documentId"],
-        "documentTitle": Path(manifest_item["name"]).stem.replace("_", " "),
-        "version": manifest_item["version"],
-        "sha256": manifest_item["sha256"],
-        "pages": {
-            str(page.page_num + 1): {
-                "width": page.width,
-                "height": page.height,
-                "unit": page.unit,
-                "angle": page.angle,
-                "lines": [
-                    {
-                        "text": line.text,
-                        "polygon": line.polygon,
-                        "spanOffset": line.span_offset,
-                        "spanLength": line.span_length,
-                    }
-                    for line in page.lines
-                ],
-            }
-            for page in pages
-        },
-    }
-
-
-def ensure_directory(file_system_client: Any, path: str) -> None:
-    from azure.core.exceptions import ResourceExistsError
-
-    current = ""
-    for segment in path.split("/"):
-        current = f"{current}/{segment}".strip("/")
-        try:
-            file_system_client.get_directory_client(current).create_directory()
-        except ResourceExistsError:
-            pass
-
-
-def upload_adls_content(
-    *,
-    values: dict[str, str],
-    manifest: dict[str, Any],
-    active_items: list[dict[str, Any]],
-    annotations: dict[str, dict[str, Any]],
-) -> None:
-    from azure.core.exceptions import ResourceExistsError
-    from azure.identity import AzureCliCredential
-    from azure.storage.filedatalake import ContentSettings, DataLakeServiceClient
-
-    endpoint = values["AZURE_STORAGE_DFS_ENDPOINT"]
-    file_system_name = values["AZURE_STORAGE_FILE_SYSTEM"]
-    credential = AzureCliCredential()
-    service_client = DataLakeServiceClient(
-        account_url=endpoint,
-        credential=credential,
-    )
-    file_system_client = service_client.get_file_system_client(file_system_name)
-    try:
-        try:
-            file_system_client.create_file_system()
-        except ResourceExistsError:
-            pass
-
-        for directory in ("documents", "annotations", "manifests"):
-            ensure_directory(file_system_client, directory)
-
-        for item in active_items:
-            document_path = item["documentPath"]
-            annotation_path = item["annotationPath"]
-            for path in (document_path, annotation_path):
-                parent = path.rsplit("/", 1)[0]
-                ensure_directory(file_system_client, parent)
-
-            metadata = {
-                "documentid": item["documentId"],
-                "region": item["region"],
-                "language": item["language"],
-                "version": item["version"],
-                "sha256": item["sha256"],
-            }
-            pdf_client = file_system_client.get_file_client(document_path)
-            pdf_client.upload_data(
-                Path(item["localPath"]).read_bytes(),
-                overwrite=True,
-                metadata=metadata,
-                content_settings=ContentSettings(
-                    content_type="application/pdf",
-                ),
-            )
-            annotation_client = file_system_client.get_file_client(
-                annotation_path
-            )
-            annotation_client.upload_data(
-                json.dumps(
-                    annotations[item["documentId"]],
-                    ensure_ascii=False,
-                ).encode("utf-8"),
-                overwrite=True,
-                metadata=metadata,
-                content_settings=ContentSettings(
-                    content_type="application/json; charset=utf-8",
-                ),
-            )
-            print(f"Uploaded PDF and annotations for {item['documentId']}")
-
-        manifest_client = file_system_client.get_file_client(
-            "manifests/manifest.json"
-        )
-        manifest_client.upload_data(
-            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-            overwrite=True,
-            content_settings=ContentSettings(
-                content_type="application/json; charset=utf-8",
-            ),
-        )
-    finally:
-        service_client.close()
-        credential.close()
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Index Global, India, Finland, and Hong Kong HR PDFs into AI Search."
-        )
+def _add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--manifest", type=Path, default=PROJECT_ROOT / "data" / "manifest.json"
     )
     parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=Path("data/manifest.json"),
+        "--output-dir", type=Path, default=PROJECT_ROOT / "output" / "ingestion"
     )
     parser.add_argument(
-        "--output-dir",
+        "--analysis-dir",
         type=Path,
-        default=Path("output/ingestion"),
+        help="Directory of source- and parser-bound analysis caches.",
     )
-    parser.add_argument("--recreate-index", action="store_true")
+    parser.add_argument(
+        "--recreate-index",
+        action="store_true",
+        help="DESTRUCTIVE: delete and rebuild a disposable index. Never use on a serving production index.",
+    )
     parser.add_argument("--reuse-analysis", action="store_true")
-    parser.add_argument("--skip-validation", action="store_true")
+    parser.add_argument(
+        "--retain-intermediate-artifacts",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--skip-adls-upload",
+        action="store_true",
+        help="Skip artifact persistence; PDF/highlight links require matching artifacts already in ADLS.",
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip only the hybrid smoke query. Exact chunk-key synchronization is always checked.",
+    )
     parser.add_argument(
         "--schema-only",
         action="store_true",
-        help=(
-            "Validate the manifest and write the proposed index schema "
-            "without analyzing PDFs or changing Azure AI Search."
-        ),
+        help="Validate local sources and write the schema without Azure calls.",
     )
-    return parser.parse_args()
+
+
+def _validate_arguments(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    required = ["openai_endpoint", "embedding_deployment"]
+    if not args.schema_only:
+        required += ["document_intelligence_endpoint", "search_endpoint", "index_name"]
+        if not args.skip_adls_upload:
+            required += ["storage_dfs_endpoint", "storage_file_system"]
+    missing = [name.replace("_", "-") for name in required if not getattr(args, name)]
+    if missing:
+        parser.error("Missing CLI/environment configuration: " + ", ".join(missing))
+    for name in required:
+        if name.endswith("endpoint"):
+            endpoint = urlsplit(getattr(args, name))
+            if (
+                endpoint.scheme != "https"
+                or not endpoint.hostname
+                or endpoint.username
+                or endpoint.password
+                or endpoint.query
+                or endpoint.fragment
+            ):
+                parser.error(
+                    f"{name} must be an HTTPS service endpoint without credentials or query parameters"
+                )
+    try:
+        validate_dimensions(args.embedding_dimensions)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.reuse_analysis and not args.analysis_dir:
+        parser.error("--reuse-analysis requires --analysis-dir")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    _add_service_arguments(parser)
+    _add_workflow_arguments(parser)
+    args = parser.parse_args()
+    _validate_arguments(parser, args)
+    return args
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
+
+
+def analyze_documents(
+    *,
+    client: DocumentIntelligenceClient,
+    active_items: list[dict[str, Any]],
+    analysis_dir: Path,
+    reuse_analysis: bool,
+    retain_analysis: bool,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Return Search documents and citation annotations for the active PDFs."""
+    documents = []
+    annotations = {}
+    for item in active_items:
+        local_path = Path(item["localPath"])
+        analysis_path = (
+            analysis_dir
+            / item["documentId"]
+            / item["version"]
+            / f"{item['sha256']}.json"
+        )
+        print(f"Analyzing {local_path.name}...")
+        pages = load_or_analyze_pages(
+            client=client,
+            path=local_path,
+            output_path=analysis_path,
+            reuse_analysis=reuse_analysis,
+            retain_analysis=retain_analysis,
+            document_id=item["documentId"],
+            document_version=item["version"],
+            source_sha256=item["sha256"],
+        )
+        chunks = build_search_documents(pages=pages, manifest_item=item)
+        if not chunks:
+            raise RuntimeError(f"No searchable content remains in {local_path.name}")
+        documents.extend(chunks)
+        annotations[item["documentId"]] = annotation_payload(
+            manifest_item=item, pages=pages
+        )
+        print(f"Created {len(chunks)} chunks from {local_path.name}")
+    return documents, annotations
+
+
+def _synchronize_index(
+    args: argparse.Namespace,
+    schema: dict[str, Any],
+    documents: list[dict[str, Any]],
+    credential: TokenCredential,
+) -> dict[str, Any]:
+    create_index(
+        endpoint=args.search_endpoint,
+        index_name=args.index_name,
+        schema=schema,
+        recreate=args.recreate_index,
+        credential=credential,
+    )
+    removed = synchronize_documents(
+        endpoint=args.search_endpoint,
+        index_name=args.index_name,
+        documents=documents,
+        credential=credential,
+    )
+    summary = {"removedStaleChunks": removed, "exactChunkCoverage": True}
+    if not args.skip_validation:
+        summary["retrieval"] = validate_index(
+            endpoint=args.search_endpoint,
+            index_name=args.index_name,
+            expected_regions={item["region"] for item in documents},
+            expected_document_ids={item["document_id"] for item in documents},
+            expected_chunk_ids={item["chunk_id"] for item in documents},
+            credential=credential,
+        )
+    return summary
+
+
+def run_ingestion(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    active_items: list[dict[str, Any]],
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Run PDF ingestion and return document counts and validation results.
+
+    Analyze and embed documents before updating storage or Search.
+    Unless ADLS upload is skipped, upload citation artifacts before
+    indexing and publish the manifest after index synchronization.
+    """
+    with (
+        AzureCliCredential() as credential,
+        DocumentIntelligenceClient(
+            endpoint=args.document_intelligence_endpoint,
+            credential=credential,
+            api_version=ANALYSIS_API_VERSION,
+        ) as document_client,
+    ):
+        documents, annotations = analyze_documents(
+            client=document_client,
+            active_items=active_items,
+            analysis_dir=args.analysis_dir or args.output_dir / "document-analysis",
+            reuse_analysis=args.reuse_analysis,
+            retain_analysis=args.reuse_analysis or args.retain_intermediate_artifacts,
+        )
+        if args.retain_intermediate_artifacts:
+            _write_json(args.output_dir / "chunks-without-vectors.json", documents)
+        embed_documents(
+            documents=documents,
+            endpoint=args.openai_endpoint,
+            deployment=args.embedding_deployment,
+            dimensions=args.embedding_dimensions,
+            credential=credential,
+        )
+        if not args.skip_adls_upload:
+            upload_adls_content(
+                endpoint=args.storage_dfs_endpoint,
+                file_system_name=args.storage_file_system,
+                credential=credential,
+                active_items=active_items,
+                annotations=annotations,
+            )
+        validation = _synchronize_index(args, schema, documents, credential)
+        if not args.skip_adls_upload:
+            publish_manifest(
+                endpoint=args.storage_dfs_endpoint,
+                file_system_name=args.storage_file_system,
+                credential=credential,
+                manifest=manifest,
+                active_items=active_items,
+            )
+        return {
+            "completedAt": datetime.now(UTC).isoformat(),
+            "documents": len(active_items),
+            "chunks": len(documents),
+            "indexName": args.index_name,
+            "validation": validation,
+        }
 
 
 def main() -> None:
     args = parse_args()
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    document_ids: set[str] = set()
-    for manifest_item in manifest["documents"]:
-        missing_fields = sorted(
-            REQUIRED_MANIFEST_FIELDS - manifest_item.keys()
-        )
-        if missing_fields:
-            raise ValueError(
-                f"Missing manifest fields {missing_fields} for "
-                f"{manifest_item.get('name', '<unnamed>')}"
-            )
-        region = manifest_item.get("region")
-        language = manifest_item.get("language")
-        if region not in SUPPORTED_REGIONS:
-            raise ValueError(
-                f"Unsupported or missing region {region!r} for "
-                f"{manifest_item.get('name', '<unnamed>')}"
-            )
-        if not isinstance(manifest_item["isActive"], bool):
-            raise ValueError(
-                f"isActive must be true or false for {manifest_item['name']}"
-            )
-        document_id = manifest_item["documentId"]
-        if document_id in document_ids:
-            raise ValueError(f"Duplicate document ID {document_id}")
-        document_ids.add(document_id)
-        local_path = Path(manifest_item["localPath"])
-        if not local_path.exists():
-            raise FileNotFoundError(local_path)
-        actual_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
-        if actual_hash != manifest_item["sha256"]:
-            raise RuntimeError(
-                f"SHA-256 mismatch for {local_path}: "
-                f"manifest {manifest_item['sha256']}, actual {actual_hash}"
-            )
-        if language not in SUPPORTED_LANGUAGES:
-            raise ValueError(
-                f"Unsupported or missing language {language!r} for "
-                f"{manifest_item.get('name', '<unnamed>')}"
-            )
-    active_manifest_items = [
-        item for item in manifest["documents"] if item["isActive"]
-    ]
-    if not active_manifest_items:
-        raise ValueError("The manifest contains no active documents")
-    for item in active_manifest_items:
-        version = str(item["version"])
-        document_id = str(item["documentId"])
-        item["documentPath"] = f"documents/{document_id}/{version}.pdf"
-        item["annotationPath"] = f"annotations/{document_id}/{version}.json"
-    values = azd_values()
-
-    document_endpoint = values["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"]
-    openai_endpoint = values["AZURE_OPENAI_ENDPOINT"]
-    embedding_deployment = values["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"]
-    dimensions = int(
-        values.get(
-            "AZURE_OPENAI_EMBEDDING_DIMENSIONS",
-            DEFAULT_VECTOR_DIMENSIONS,
-        )
-    )
-    search_endpoint = values["AZURE_SEARCH_ENDPOINT"]
-    index_name = values.get("AZURE_SEARCH_INDEX_NAME", DEFAULT_INDEX_NAME)
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest, active_items = load_manifest(args.manifest)
     schema = index_schema(
-        index_name=index_name,
-        openai_endpoint=openai_endpoint,
-        embedding_deployment=embedding_deployment,
-        dimensions=dimensions,
+        index_name=args.index_name or DEFAULT_INDEX_NAME,
+        openai_endpoint=args.openai_endpoint,
+        embedding_deployment=args.embedding_deployment,
+        dimensions=args.embedding_dimensions,
     )
     schema_path = args.output_dir / "index-schema.json"
-    schema_path.write_text(
-        json.dumps(schema, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json(schema_path, schema)
     if args.schema_only:
         print(
             json.dumps(
                 {
-                    "documents": len(active_manifest_items),
-                    "regions": sorted(
-                        {item["region"] for item in active_manifest_items}
-                    ),
-                    "languages": sorted(
-                        {item["language"] for item in active_manifest_items}
-                    ),
-                    "documentIds": sorted(
-                        item["documentId"] for item in active_manifest_items
-                    ),
+                    "documents": len(active_items),
                     "schema": str(schema_path),
                     "indexChanged": False,
                 },
-                ensure_ascii=False,
                 indent=2,
             )
         )
         return
-
-    from azure.ai.documentintelligence import DocumentIntelligenceClient
-    from azure.identity import AzureCliCredential
-
-    credential = AzureCliCredential()
-    document_client = DocumentIntelligenceClient(
-        endpoint=document_endpoint,
-        credential=credential,
-    )
-    documents: list[dict[str, Any]] = []
-    annotations: dict[str, dict[str, Any]] = {}
-    try:
-        for manifest_item in active_manifest_items:
-            local_path = Path(manifest_item["localPath"])
-            analysis_path = (
-                args.output_dir
-                / "sdk-layout"
-                / manifest_item["region"]
-                / f"{local_path.stem}.json"
-            )
-            print(f"Analyzing {local_path}...")
-            pages = load_or_analyze_pages(
-                client=document_client,
-                path=local_path,
-                output_path=analysis_path,
-                reuse_analysis=args.reuse_analysis,
-            )
-            document_chunks = build_sdk_documents(
-                pages=pages,
-                manifest_item=manifest_item,
-            )
-            if not document_chunks:
-                raise RuntimeError(
-                    f"No chunks were created for {local_path}"
-                )
-            annotations[manifest_item["documentId"]] = annotation_payload(
-                manifest_item=manifest_item,
-                pages=pages,
-            )
-            documents.extend(document_chunks)
-            print(
-                f"Created {len(document_chunks)} chunks from "
-                f"{local_path.name}"
-            )
-    finally:
-        document_client.close()
-        credential.close()
-
-    chunks_path = args.output_dir / "chunks-without-vectors.json"
-    chunks_path.write_text(
-        json.dumps(documents, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"Created {len(documents)} chunks from {len(active_manifest_items)} PDFs")
-
-    print("Uploading PDFs, annotations, and manifest to ADLS Gen2...")
-    upload_adls_content(
-        values=values,
-        manifest=manifest,
-        active_items=active_manifest_items,
-        annotations=annotations,
-    )
-
-    print("Generating embeddings...")
-    embed_documents(
-        documents=documents,
-        endpoint=openai_endpoint,
-        deployment=embedding_deployment,
-        dimensions=dimensions,
-    )
-
-    print(f"Creating Azure AI Search index {index_name}...")
-    create_index(
-        endpoint=search_endpoint,
-        index_name=index_name,
-        schema=schema,
-        recreate=args.recreate_index,
-    )
-    upload_documents(
-        endpoint=search_endpoint,
-        index_name=index_name,
-        documents=documents,
-    )
-
-    validation_path = None
-    if not args.skip_validation:
-        validation = validate_index(
-            endpoint=search_endpoint,
-            index_name=index_name,
-            openai_endpoint=openai_endpoint,
-            embedding_deployment=embedding_deployment,
-            dimensions=dimensions,
-            expected_regions={
-                item["region"] for item in active_manifest_items
-            },
-            expected_document_ids={
-                item["documentId"] for item in active_manifest_items
-            },
-        )
-        validation_path = args.output_dir / "validation.json"
-        validation_path.write_text(
-            json.dumps(validation, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    print(
-        json.dumps(
-            {
-                "completedAt": datetime.now(timezone.utc).isoformat(),
-                "documents": len(active_manifest_items),
-                "chunks": len(documents),
-                "indexName": index_name,
-                "schema": str(schema_path),
-                "validation": (
-                    str(validation_path) if validation_path else None
-                ),
-            },
-            indent=2,
-        )
-    )
+    summary = run_ingestion(args, manifest, active_items, schema)
+    _write_json(args.output_dir / "validation.json", summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

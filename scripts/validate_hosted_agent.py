@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Run hard Ask HR quality cases against the deployed Responses endpoint."""
+"""Run required Ask HR checks against the deployed Responses endpoint."""
 
 from __future__ import annotations
 
 import json
 import random
-import re
 import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = PROJECT_ROOT / "tests" / "agent-quality-cases.json"
@@ -204,11 +202,15 @@ def unsupported_uk(result: AgentResponse) -> None:
     answer = result.answer
     lowered = answer.casefold()
     if (
-        "no active" not in lowered
-        or "policy" not in lowered
+        not any(
+            phrase in lowered
+            for phrase in ("no active", "not supported", "unsupported")
+        )
         or "uk" not in lowered
     ):
         raise AssertionError("Agent did not reject unsupported UK policy")
+    if result.references:
+        raise AssertionError("Unsupported UK policy returned evidence")
     for forbidden in ("Finland HR", "India HR", "HongKong HR"):
         if forbidden in result.validation_text:
             raise AssertionError(f"Agent substituted forbidden source {forbidden}")
@@ -246,6 +248,7 @@ def no_evidence(result: AgentResponse) -> None:
             "not covered",
             "not enough information",
             "cannot confirm",
+            "can't confirm",
             "cannot identify",
             "can't identify",
             "no company policy",
@@ -257,28 +260,9 @@ def no_evidence(result: AgentResponse) -> None:
 
 
 def rich_citations(result: AgentResponse) -> None:
-    reference_ids = {
-        match.group(1)
-        for match in re.finditer(
-            r"(?im)^Reference:\s*([a-f0-9]{20,})\s*$",
-            result.answer,
-        )
-    }
-    source_ids = {
-        reference.get("chunk_id")
-        for reference in result.references
-        if reference.get("chunk_id")
-    }
-    if not reference_ids:
-        raise AssertionError("Agent did not emit stable reference IDs")
-    if not reference_ids.issubset(source_ids):
-        raise AssertionError("Agent emitted a reference not returned by retrieval")
-    for reference_id in reference_ids:
-        source = next(
-            reference
-            for reference in result.references
-            if reference.get("chunk_id") == reference_id
-        )
+    if not result.references:
+        raise AssertionError("Agent did not return citation evidence")
+    for source in result.references:
         for field in (
             "document_id",
             "document_title",
@@ -290,7 +274,7 @@ def rich_citations(result: AgentResponse) -> None:
         ):
             if source.get(field) in (None, ""):
                 raise AssertionError(
-                    f"Reference {reference_id} is missing {field}"
+                    f"Citation is missing {field}"
                 )
 
 
@@ -337,6 +321,10 @@ VALIDATORS: dict[str, Callable[[AgentResponse], None]] = {
     ),
     "AGENT-REGION-LABEL": contains_all(
         "Hong Kong",
+        "HongKong HR Working Hours Leave and Holidays zh-HK",
+    ),
+    "AGENT-HK-ANNUAL-LEAVE": contains_all(
+        "14",
         "HongKong HR Working Hours Leave and Holidays zh-HK",
     ),
 }

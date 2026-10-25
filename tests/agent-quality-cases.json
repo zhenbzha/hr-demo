@@ -5,10 +5,12 @@
     {
       "id": "AGENT-REGION-CLARIFY",
       "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
       "query": "How much annual leave do I receive?",
       "expectedRegionClassification": {
         "regions": [],
-        "confidence": "low"
+        "status": "clarify"
       },
       "expectedBehavior": [
         "Ask which employment region applies.",
@@ -22,7 +24,7 @@
       "query": "What are the Hong Kogn MPF contribution rules?",
       "expectedRegionClassification": {
         "regions": ["hongkong"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedRetrievalRegions": ["hongkong", "global"],
       "expectedDocumentIds": ["HR-HK-002"],
@@ -34,7 +36,7 @@
       "query": "How much annual leave do employees receive in Finland?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedRetrievalRegions": ["finland", "global"],
       "expectedPrimaryDocumentIds": ["HR-FI-003"],
@@ -50,7 +52,7 @@
       "query": "What responsible AI rules apply to employees in India?",
       "expectedRegionClassification": {
         "regions": ["india"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedRetrievalRegions": ["india", "global"],
       "expectedSupportingDocumentIds": ["HR-POL-001"],
@@ -65,7 +67,7 @@
       "query": "Compare annual leave in Finland and Hong Kong.",
       "expectedRegionClassification": {
         "regions": ["finland", "hongkong"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedRetrievalRegions": ["finland", "hongkong", "global"],
       "expectedDocumentIds": ["HR-FI-003", "HR-HK-003"],
@@ -77,7 +79,7 @@
       "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedDocumentIds": ["HR-FI-001"],
       "assertions": [
@@ -91,7 +93,7 @@
       "query": "香港僱員有多少天年假？",
       "expectedRegionClassification": {
         "regions": ["hongkong"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedDocumentIds": ["HR-HK-003"],
       "assertions": [
@@ -102,10 +104,11 @@
     {
       "id": "AGENT-NO-EVIDENCE",
       "hardRequirement": true,
+      "expectedCitationCount": 0,
       "query": "What company policy covers private aircraft maintenance reimbursement in Finland?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedBehavior": [
         "State in employee-facing language that the available policy does not cover the request.",
@@ -134,6 +137,8 @@
       "id": "AGENT-EEM-NO-EVIDENCE",
       "workbookRefs": ["ACT-011"],
       "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
       "query": "Which countries are currently included in the EEM region?",
       "expectedBehavior": [
         "Do not invent a country list.",
@@ -148,7 +153,7 @@
       "query": "How are working hours and overtime handled in Finland?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedDocumentIds": ["HR-FI-002"],
       "forbiddenRegions": ["india", "hongkong"]
@@ -160,7 +165,7 @@
       "query": "When is salary paid in Finland and what benefits are included?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedDocumentIds": ["HR-FI-002"],
       "assertions": [
@@ -172,6 +177,8 @@
       "id": "AGENT-UNSUPPORTED-UK",
       "workbookRefs": ["ACT-001"],
       "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
       "query": "What compensation policy applies to employees in the UK?",
       "expectedBehavior": [
         "Recognize that the query asks about the United Kingdom.",
@@ -199,7 +206,7 @@
       "query": "How does Contoso handle performance improvement and employee development for employees in Finland?",
       "expectedRegionClassification": {
         "regions": ["finland"],
-        "confidence": "high"
+        "status": "retrieve"
       },
       "expectedRetrievalRegions": ["finland", "global"],
       "expectedDocumentIds": ["HR-POL-001"],
@@ -217,6 +224,26 @@
       "assertions": [
         "The response explicitly labels the entitlement as Hong Kong policy.",
         "Any Global evidence is separately labelled as Global baseline context."
+      ]
+    },
+    {
+      "id": "AGENT-HK-ANNUAL-LEAVE",
+      "workbookRefs": ["ACT-028"],
+      "hardRequirement": true,
+      "query": "How many days of annual leave do Hong Kong employees receive?",
+      "expectedRegionClassification": {
+        "regions": ["hongkong"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-HK-003"],
+      "forbiddenDocumentIds": [
+        "HR-HK-001",
+        "HR-HK-002",
+        "HR-HK-004"
+      ],
+      "assertions": [
+        "The answer states 14 paid working days.",
+        "The answer is grounded in the Hong Kong leave policy."
       ]
     }
   ]

@@ -32,6 +32,10 @@ ask-hr/src/ask-hr/activityAppPackage/
 **/out/
 **/build/
 **/output/
+**/.foundry/datasets/
+**/.foundry/evaluators/
+**/.foundry/results/
+**/.foundry/suites/
 **/playwright-report/
 **/test-results/
 **/logs/

@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "purpose": "Version 2 of the known-answer evaluator sanity check, not an independent agent acceptance set. Applies the same country-first rule per country and topic without requiring unused Global terms. The original version remains unchanged.",
+  "review": {
+    "status": "guidance_confirmed",
+    "guidance": "For each country and policy topic, use the applicable local policy when available; otherwise use Global and explicitly identify that country's Global fallback. Apply this same rule regardless of how many countries the question asks about. A retrieval miss does not establish that no country policy exists.",
+    "label_author": "assistant",
+    "basis": "The user explicitly confirmed on 2026-10-25 that single-country and multi-country questions follow the same local-first, Global-fallback rule. Both countries in the annual-leave comparison have local policies, so restating Global leave is not required. All local reference facts, other reference answers, source quotations, original captures and expected labels are preserved. The source-backed Global baseline remains available for topics requiring fallback. References and labels are assistant-derived under user guidance, not independent human or HR-expert adjudication. Both historical Finland answers remain incomplete because neither supplies the available local leave entitlements."
+  },
+  "behavior_evaluator": {
+    "name": "ask_hr_expected_behavior",
+    "version": "9"
+  },
+  "sources": [
+    {
+      "id": "HR-HK-003",
+      "path": "..\\data\\hongkong\\HongKong_HR_Working_Hours_Leave_and_Holidays_zh-HK.pdf",
+      "sha256": "2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83",
+      "analysis": {
+        "path": "..\\output\\agent-quality\\guard-cleanup-rerun-20261024\\ingestion-evidence\\analyses\\HR-HK-003.json",
+        "sha256": "281f13972e4660ca41f83bfe5433c5a44265e3ef39bfeb43f8a07cc142f3080f"
+      },
+      "passages": [
+        {
+          "page": 2,
+          "quote": "● 公司每個曆年提供14個有薪工作日年假,不少於當時法定權益。"
+        },
+        {
+          "page": 2,
+          "quote": "● 最多可把五天公司年假帶至下一年度,並須在三月底前使用。"
+        },
+        {
+          "page": 2,
+          "quote": "<td>產假</td>\n<td>不少於法定期限;公司示範安排為16星期全薪</td>"
+        },
+        {
+          "page": 3,
+          "quote": "● 兩天以上的計劃假期一般提前七天申請。"
+        },
+        {
+          "page": 3,
+          "quote": "● 主管在兩個工作日內回覆,拒絕申請時須提供業務理由。"
+        },
+        {
+          "page": 3,
+          "quote": "· 法定假期、產假、侍產假及受保障缺勤不得因人手安排而被不當拒絕。"
+        }
+      ]
+    },
+    {
+      "id": "HR-FI-003",
+      "path": "..\\data\\finland\\Finland_HR_Leave_and_Holidays.pdf",
+      "sha256": "c2f42f7006afe0aaba6aa526cbbd1119438078d6d5f6a0069db27c40d1aac693",
+      "analysis": {
+        "path": "..\\output\\agent-quality\\guard-cleanup-rerun-20261024\\ingestion-evidence\\analyses\\HR-FI-003.json",
+        "sha256": "0d343cb12a93dea6bc6475db4cd698cbfa3a10c1dc28b52adad06cee2349c60f"
+      },
+      "passages": [
+        {
+          "page": 2,
+          "quote": "· Lomanmääräytymisvuosi on 1.4 .- 31.3."
+        },
+        {
+          "page": 2,
+          "quote": "· Täysi kuukausi määräytyy 14 päivän tai 35 tunnin säännön mukaan."
+        },
+        {
+          "page": 2,
+          "quote": "<td>Alle yksi vuosi</td>\n<td>2 arkipäivää</td>"
+        },
+        {
+          "page": 2,
+          "quote": "<td>Vähintään yksi vuosi</td>\n<td>2,5 arkipäivää</td>"
+        },
+        {
+          "page": 2,
+          "quote": "· Yli 18 arkipäivän osasta voidaan sopia säästövapaata."
+        },
+        {
+          "page": 2,
+          "quote": "· Kuukausipalkka jatkuu normaalisti vuosiloman aikana."
+        },
+        {
+          "page": 2,
+          "quote": "· Työsuhteen päättyessä pitämätön loma maksetaan lomakorvauksena."
+        },
+        {
+          "page": 2,
+          "quote": "<td>Omailmoitus</td>\n<td>Enintään kolme peräkkäistä päivää</td>"
+        },
+        {
+          "page": 2,
+          "quote": "<td>Todistus</td>\n<td>Pidemmästä poissaolosta työterveyshuollon todistus</td>"
+        },
+        {
+          "page": 2,
+          "quote": "<td>Palkka</td>\n<td>Lain ja työehtosopimuksen mukainen sairausajan palkka</td>"
+        },
+        {
+          "page": 2,
+          "quote": "· Contoso täydentää etuutta niin, että kummallakin vanhemmalla on fiktiivisessä demossa yhteensä 16 viikkoa\ntäyttä palkkaa."
+        },
+        {
+          "page": 3,
+          "quote": "· Hoitovapaa on mahdollinen lapsen kolmeen ikävuoteen asti."
+        },
+        {
+          "page": 3,
+          "quote": "· Äkillisesti sairastuneen alle 10-vuotiaan lapsen hoitamiseksi voi saada tilapäistä hoitovapaata enintään neljä\ntyöpäivää kerrallaan."
+        },
+        {
+          "page": 3,
+          "quote": "· Omaishoitovapaata voidaan myöntää enintään viisi työpäivää vuodessa lain edellytyksin."
+        },
+        {
+          "page": 3,
+          "quote": "<td>Opintovapaa</td>\n<td>Lain mukainen palkaton vapaa</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Suruvapaa</td>\n<td>5 palkallista työpäivää läheisen kuolemasta</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Oma vihkipäivä</td>\n<td>1 palkallinen työpäivä</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Reservin kertausharjoitus</td>\n<td>Palkka työehtosopimuksen mukaan</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Vapaaehtoistyö</td>\n<td>2 palkallista päivää vuodessa</td>"
+        }
+      ]
+    },
+    {
+      "id": "HR-FI-002",
+      "path": "..\\data\\finland\\Finland_HR_Working_Hours_Pay_and_Benefits.pdf",
+      "sha256": "9f51297351c454e71b1f03ddf4c954524556b1a58dbf5eef79dd2ae4c3753f89",
+      "analysis": {
+        "path": "..\\output\\agent-quality\\guard-cleanup-rerun-20261024\\ingestion-evidence\\analyses\\HR-FI-002.json",
+        "sha256": "a7c07d32bf4673be6f5b4b3ab8a6967120bdb559116c40abc4092ee5f2d9546b"
+      },
+      "passages": [
+        {
+          "page": 2,
+          "quote": "· Kuukausipalkka maksetaan kuukauden viimeisenä pankkipäivänä."
+        },
+        {
+          "page": 3,
+          "quote": "Lomaraha ei perustu vuosilomalakiin vaan työehtosopimukseen tai työsopimukseen. Tässä demossa lomaraha on\n50 prosenttia lomapalkasta ja maksetaan kesäkuun palkan yhteydessä."
+        },
+        {
+          "page": 3,
+          "quote": "· TyEL-eläkevakuutus, työttömyysvakuutus, tapaturmavakuutus ja ryhmähenkivakuutus järjestetään lain mukaan."
+        },
+        {
+          "page": 3,
+          "quote": "· Ehkäisevä työterveyshuolto kattaa kaikki työntekijät ensimmäisestä työpäivästä."
+        },
+        {
+          "page": 3,
+          "quote": "<td>Lounasetu</td>\n<td>13 euroa työpäivältä</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Liikunta- ja kulttuurietu</td>\n<td>400 euroa vuodessa</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Työmatkaetu</td>\n<td>Enintään 800 euroa vuodessa</td>"
+        },
+        {
+          "page": 3,
+          "quote": "<td>Kotitoimisto</td>\n<td>300 euron kertakorvaus hyväksyttyyn ergonomiaan</td>"
+        }
+      ]
+    },
+    {
+      "id": "HR-POL-001",
+      "path": "..\\data\\global\\Global_HR_Policy_Handbook.pdf",
+      "sha256": "d43730a7adbe22365654ca7561becf8b43dd1d2bb3833f42f8b86188b39e8d80",
+      "analysis": {
+        "path": "..\\output\\agent-quality\\guard-cleanup-rerun-20261024\\ingestion-evidence\\analyses\\HR-POL-001.json",
+        "sha256": "c2387e8fee310802e1f1ab1a8e8150dcb5fb7e6ece246a92d4eb8066822c5c56"
+      },
+      "passages": [
+        {
+          "page": 2,
+          "quote": "Order of precedence: mandatory law, binding collective agreement, employment contract, country policy, then this\nhandbook."
+        },
+        {
+          "page": 2,
+          "quote": "<td>Annual leave</td>\n<td>Local statutory minimum or 22 working days, whichever is greater</td>"
+        }
+      ]
+    }
+  ],
+  "captures": [
+    {
+      "id": "original",
+      "path": "..\\output\\agent-quality\\native-rerank-fix-20261024\\packed\\pipeline.json",
+      "sha256": "ba4bf6a1c974b7e4df7035aa6c8c4bde1ec0f27cbd8677a5633148a83f652875",
+      "generation_instructions": "You are Ask HR, an internal HR policy assistant.\n\nUse only the authorized evidence supplied in this request. Previous user\nquestions can clarify the current question, but previous assistant answers are\nnever policy evidence. Local policy takes precedence over Global baseline\ncontent for the same topic. Global content can supplement topics not covered\nlocally.\n\nTreat each evidence scope exactly as labeled. Never describe Global evidence\nas part of a local policy. When local evidence does not cover a topic, say so\nbefore presenting a Global baseline. Do not infer eligibility categories,\nfamily relationships, benefit coverage, or legal meaning that the evidence\ndoes not explicitly state.\n\nWrite for an employee. Never mention indexes, retrieval, vectors, chunks,\ncorpora, grounding, tool calls, or returned evidence. Say \"the policy does not\nspecify\" when a requested detail is absent. If no accessible evidence is\nreturned, respond exactly:\nNo accessible HR policy evidence was found for this question.\n\nAnswer in the user's language. Do not invent policy, entitlement, deadlines,\nsources, links, references, or identifiers. Do not add citation markers;\nprotocol adapters attach citations separately."
+    },
+    {
+      "id": "revised",
+      "path": "..\\output\\agent-quality\\native-rerank-fix-20261024\\prompt-revision\\pipeline.json",
+      "sha256": "f7ef0ac20bde7b1d04e3f002d4d348d3c71dd19ac070d16a272d365d6cc1f7d1",
+      "generation_instructions": "You are Ask HR, an internal HR policy assistant.\n\nUse only the authorized evidence supplied in this request. Previous user\nquestions can clarify the current question, but previous assistant answers are\nnever policy evidence. Local policy takes precedence over Global baseline\ncontent for the same topic. Global content can supplement topics not covered\nin the supplied local evidence.\n\nPreserve source meaning when translating or summarizing. Before finalizing,\nsilently check every claim, including every table cell, against its own source\nscope, units, conditions, and exceptions. For every quantitative limit, establish\nthe source comparison relation, translate it using unmistakably inclusive or\nexclusive wording, and verify that the original and translated statements have\nthe same truth value at the boundary itself. Do not use colloquial approximations\nor transfer qualifiers or counting units between policies. If equivalence of a\ncounting term in the answer language is not established, retain the original\nterm rather than assume a conversion. Do not omit relevant facts to avoid this\nverification. Output only the employee answer, not the internal check.\n\nTreat each evidence scope exactly as labeled. Never describe Global evidence\nas part of a local policy. When the supplied local evidence does not cover a\ntopic, say that the local position is unknown from that evidence before\npresenting an explicitly labeled Global baseline; do not imply that no local\npolicy exists, that all local policies have been checked, or that Global\nentitlements are confirmed local terms. Do not infer eligibility categories,\nfamily relationships, benefit coverage, or legal meaning that the evidence\ndoes not explicitly state.\n\nWrite for an employee. Never mention indexes, retrieval, vectors, chunks,\ncorpora, grounding, tool calls, or returned evidence. Say \"the supplied policy\ninformation does not establish this detail\" when a requested detail is absent. If no accessible evidence is\nreturned, respond exactly:\nNo accessible HR policy evidence was found for this question.\n\nAnswer in the user's language. Do not invent policy, entitlement, deadlines,\nsources, links, references, or identifiers. Do not add citation markers;\nprotocol adapters attach citations separately."
+    }
+  ],
+  "references": [
+    {
+      "case_id": "AGENT-EXPLICIT-COMPARISON",
+      "query": "Compare annual leave in Finland and Hong Kong.",
+      "basis": "policy",
+      "source_ids": ["HR-FI-003", "HR-HK-003"],
+      "ground_truth": "These are fictional local demo policies, not confirmation of real employment entitlements. Finland's accrual year is 1 April to 31 March. Each full qualifying month earns 2 arkipäivää if employment has lasted less than one year as at 31 March, or 2.5 arkipäivää if it has lasted at least one year. A full month follows the 14-day or 35-hour rule; certain sickness, family-leave and layoff absences count as work. Summer leave is mainly 2 May to 30 September. Employee preferences are heard before dates are confirmed, normally one month ahead or at least two weeks ahead. Leave exceeding 18 arkipäivää may be saved by agreement. Monthly salary continues during annual leave; unused leave is compensated on termination. Holiday bonus follows the collective agreement. Incapacity at the start of or during leave must be reported promptly with reliable evidence. Hong Kong provides 14 paid working days per calendar year, no less than the statutory entitlement, with joining/leaving-year proration. Up to five company annual-leave days can carry over and must be used by the end of March. Planned leave of two days or more is normally requested seven days ahead; exactly two days is included. Managers respond within two working days and give business reasons for refusal. Statutory annual-leave arrangements and unused-leave payment follow the Employment Ordinance. Do not equate Finnish arkipäivää with Hong Kong working days without an established conversion.",
+      "samples": [
+        {
+          "capture": "original",
+          "expected": {"groundedness": false, "behavioral_adherence": false},
+          "reason": "The answer says planned leave of more than two days, excluding exactly two days contrary to HR-HK-003 page 3. This is a critical source-fidelity discrepancy for this sanity check, not an assertion that every other metric must fail."
+        },
+        {
+          "capture": "revised",
+          "expected": {"groundedness": true, "response_completeness": true, "behavioral_adherence": true},
+          "reason": "The recorded answer preserves the local entitlements, counting units, inclusive two-day threshold, carryover limits and local precedence."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-REGION-LABEL",
+      "query": "What is the maternity leave policy in Hong Kong?",
+      "basis": "policy",
+      "source_ids": ["HR-HK-003"],
+      "ground_truth": "The supplied Hong Kong document is explicitly a fictional demo, not a confirmed employment entitlement. Maternity leave is no shorter than the statutory duration; the company's demonstration arrangement is 16 weeks at full pay. Maternity leave is handled under the Employment Ordinance, and statutory entitlements and eligibility follow the Labour Department's published requirements. Planned leave lasting two days or more is normally requested seven days in advance, including a request lasting exactly two days. Managers respond within two working days and provide business reasons for refusal. Maternity leave and other protected absences must not be improperly refused because of staffing arrangements. The supplied policy information does not establish detailed eligibility criteria, required supporting documents or when maternity leave must begin; do not invent those details or replace the fictional arrangement with external statutory figures.",
+      "samples": [
+        {
+          "capture": "original",
+          "expected": {"groundedness": false, "behavioral_adherence": false},
+          "reason": "The main 16-week demonstration arrangement is correctly labeled, but the extra application guidance incorrectly changes two days or more into more than two days."
+        },
+        {
+          "capture": "revised",
+          "expected": {"groundedness": true, "response_completeness": true, "behavioral_adherence": true},
+          "reason": "The recorded answer preserves the fictional scope, 16 weeks at full pay, inclusive planned-leave threshold, response time and uncertainty about unspecified eligibility details."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-FI-PAYROLL",
+      "query": "When is salary paid in Finland and what benefits are included?",
+      "basis": "policy",
+      "source_ids": ["HR-FI-002", "HR-FI-003", "HR-POL-001"],
+      "ground_truth": "These Finland policies are fictional demos, not real employment-policy guarantees. Monthly salary is paid on the last banking day of the month. Listed benefits are lunch at EUR 13 per working day, sports and culture at EUR 400 per year, commuting up to EUR 800 per year, a bicycle leasing programme under applicable tax rules, and a one-time EUR 300 reimbursement for approved home-office ergonomics. Statutory TyEL pension, unemployment, accident and group-life insurance are arranged according to law. Preventive occupational healthcare covers employees from their first working day, with additional GP-level medical care, early support and return-to-work support. The demo holiday bonus is 50 percent of holiday pay, paid with June's salary, based on the applicable collective agreement or employment contract rather than the Annual Holidays Act. The payslip shows salary components, benefits in kind, tax withholding and other deductions; errors are corrected promptly and substantial underpayments in a separate run. The available Finland leave policy supplies the local leave benefits: annual leave accrues over 1 April to 31 March at 2 arkipäivää per full qualifying month if employment has lasted less than one year as at 31 March, or 2.5 arkipäivää if it has lasted at least one year. A full month follows the 14-day or 35-hour rule. Monthly salary continues during annual leave, and unused leave is compensated on termination. Each parent receives a demo top-up to a total of 16 weeks at full pay. Sick pay follows law and the collective agreement; self-certified absence is allowed for up to three consecutive days, with an occupational-health certificate for longer absence. Childcare leave is possible until the child turns three; temporary care leave for a suddenly ill child under ten is up to four working days at a time. Carer's leave is up to five working days per year subject to legal conditions. Other local benefits include five paid working days for bereavement, one paid working day for the employee's wedding, two paid days per year for volunteering, statutory unpaid study leave, and reservist-refresher pay under the collective agreement. Do not substitute the Global 22-working-day annual-leave baseline or unspecified Global parent leave for these available Finland terms, even if the payroll passages alone omit them. Global may supplement only topics for which no applicable country policy is available. Applicable law, collective agreements and the employment contract take precedence over the demo.",
+      "samples": [
+        {
+          "capture": "original",
+          "expected": {"response_completeness": false},
+          "reason": "The answer omits available Finland annual-leave and 16-week paid parental-leave terms and presents Global leave instead. Country-first reference completeness should detect those missing local entitlements. Its retrieved payroll/Global context does not contain the Finland leave policy, so do not automatically assign a negative groundedness or historical instruction-adherence label for information those judges never receive."
+        },
+        {
+          "capture": "revised",
+          "expected": {"response_completeness": false},
+          "reason": "The qualification that Global terms are not confirmed Finland terms avoids overclaiming but does not supply the available local annual and paid parental-leave entitlements. The same country-first requirement applies to this answer, so it is not a complete reference answer. Groundedness and the unchanged HR behavior rubric remain visible diagnostics against the actual captured context, not pre-labeled proof of country-policy coverage."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-REGION-CLARIFY",
+      "query": "How much annual leave do I receive?",
+      "basis": "application_contract",
+      "source_ids": [],
+      "ground_truth": "Ask which country or employment region applies before stating an annual-leave entitlement. Do not guess a region or invent an entitlement. A concise country-clarification question is the appropriate response to this underspecified request.",
+      "samples": [
+        {
+          "capture": "revised",
+          "expected": {"response_completeness": true, "behavioral_adherence": true},
+          "reason": "The user-facing response asks which country's policy applies. Its classifier trace records clarify with no region or retrieval. The raw classifier JSON response was not saved, so do not apply generation Task Adherence to this display message."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-EEM-NO-EVIDENCE",
+      "query": "Which countries are currently included in the EEM region?",
+      "basis": "application_contract",
+      "source_ids": [],
+      "ground_truth": "Ask the user to clarify which region or country EEM refers to. Do not invent an EEM country list or substitute a supported country when the region cannot be resolved from the available application context.",
+      "samples": [
+        {
+          "capture": "revised",
+          "expected": {"response_completeness": true, "behavioral_adherence": true},
+          "reason": "The recorded response asks what EEM refers to without inventing a list. The classifier trace records clarify with no region or retrieval; no generation turn exists for Task Adherence."
+        }
+      ]
+    }
+  ]
+}

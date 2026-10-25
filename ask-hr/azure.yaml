@@ -27,7 +27,7 @@ services:
           version: "2026-09-29"
         sku:
           name: GlobalStandard
-          capacity: 10
+          capacity: 100
 
   ask-hr:
     host: azure.ai.agent

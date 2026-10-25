@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 from urllib.parse import quote
 
 import httpx
-from agent_framework import Agent
+from agent_framework import Agent, AgentResponseUpdate, ResponseStream
 from agent_framework.foundry import FoundryChatClient
 from azure.ai.agentserver.core import AgentConfig
 from azure.identity import (
@@ -17,7 +17,6 @@ from azure.identity import (
     get_bearer_token_provider,
 )
 from dotenv import load_dotenv
-
 from permission_contract import (
     build_search_body,
     build_search_headers,
@@ -25,20 +24,45 @@ from permission_contract import (
     compact_search_evidence,
     validated_search_endpoint,
 )
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_core import from_json
 from region_classification import (
     RegionDecision,
     load_supported_regions,
     validate_region_decision,
 )
 
-
 load_dotenv()
 
 SEARCH_SCOPE = "https://search.azure.com/.default"
 NO_ACCESSIBLE_EVIDENCE = (
-    "No accessible HR policy evidence was found for this question."
+    "I can't confirm this from the available HR policy information. "
+    "Please check with your HR team for confirmation. "
+    "Missing information does not mean that a request or expense is approved or prohibited."
 )
 MAX_QUESTION_LENGTH = 4_000
+GENERATION_REASONING_EFFORT = "medium"
+
+
+class PolicyAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    answer: str = Field(
+        description=(
+            "The complete employee-facing answer in the user's language. "
+            "Cover the question's applicable policy benefits and their conditions. "
+            "Do not include source IDs or inline citation markers."
+        )
+    )
+    source_ids: list[str] = Field(
+        description=(
+            "Exact source_id values from authorized_evidence supporting the answer. "
+            "Include all sources needed to support its factual claims, and only "
+            "those sources. Exclude unused or merely retrieved passages. "
+            "Use an empty list when no policy answer is supported."
+        )
+    )
+
 
 SUPPORTED_REGIONS = load_supported_regions(
     os.environ["ASK_HR_SUPPORTED_REGIONS_JSON"]
@@ -52,17 +76,31 @@ Use only the authorized evidence supplied in this request. Previous user
 questions can clarify the current question, but previous assistant answers are
 never policy evidence. Local policy takes precedence over Global baseline
 content for the same topic. Global content can supplement topics not covered
-locally.
+in the supplied local evidence.
+
+Preserve source meaning when translating or summarizing. Before finalizing,
+silently check every claim, including every table cell, against its own source
+scope, units, conditions, and exceptions. For every quantitative limit, establish
+the source comparison relation, translate it using unmistakably inclusive or
+exclusive wording, and verify that the original and translated statements have
+the same truth value at the boundary itself. Do not use colloquial approximations
+or transfer qualifiers or counting units between policies. If equivalence of a
+counting term in the answer language is not established, retain the original
+term rather than assume a conversion. Do not omit relevant facts to avoid this
+verification. Output only the employee answer, not the internal check.
 
 Treat each evidence scope exactly as labeled. Never describe Global evidence
-as part of a local policy. When local evidence does not cover a topic, say so
-before presenting a Global baseline. Do not infer eligibility categories,
+as part of a local policy. When the supplied local evidence does not cover a
+topic, say that the local position is unknown from that evidence before
+presenting an explicitly labeled Global baseline; do not imply that no local
+policy exists, that all local policies have been checked, or that Global
+entitlements are confirmed local terms. Do not infer eligibility categories,
 family relationships, benefit coverage, or legal meaning that the evidence
 does not explicitly state.
 
 Write for an employee. Never mention indexes, retrieval, vectors, chunks,
-corpora, grounding, tool calls, or returned evidence. Say "the policy does not
-specify" when a requested detail is absent. If no accessible evidence is
+corpora, grounding, tool calls, or returned evidence. Say "the supplied policy
+information does not establish this detail" when a requested detail is absent. If no accessible evidence is
 returned, respond exactly:
 {NO_ACCESSIBLE_EVIDENCE}
 
@@ -120,7 +158,7 @@ generation_agent = Agent(
     instructions=GENERATION_INSTRUCTIONS,
     default_options={
         "store": False,
-        "reasoning": {"effort": "low"},
+        "reasoning": {"effort": GENERATION_REASONING_EFFORT},
     },
 )
 
@@ -224,6 +262,90 @@ def build_generation_input(
     )
 
 
+def select_answer_sources(
+    value: object, references: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    if not isinstance(value, PolicyAnswer):
+        raise RuntimeError("The generation model returned invalid structured output")
+    answer = value.answer.strip()
+    if not answer:
+        raise RuntimeError("The generation model returned an empty answer")
+    if answer == NO_ACCESSIBLE_EVIDENCE:
+        if value.source_ids:
+            raise RuntimeError("An unsupported answer must not claim policy sources")
+        return answer, []
+    if not value.source_ids:
+        raise RuntimeError("The policy answer did not identify any supporting sources")
+    available = {
+        reference["sourceData"]["chunk_id"]: reference
+        for reference in unique_references(references)
+    }
+    if any(identifier not in available for identifier in value.source_ids):
+        raise RuntimeError(
+            "The policy answer cited a source outside its supplied evidence"
+        )
+    return answer, [
+        available[identifier] for identifier in dict.fromkeys(value.source_ids)
+    ]
+
+
+async def generate_answer(
+    generation_input: str, references: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]]]:
+    result = await generation_agent.run(
+        generation_input, options={"response_format": PolicyAnswer}
+    )
+    return select_answer_sources(result.value, references)
+
+
+class _AnswerTextDecoder:
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.text = ""
+
+    def append(self, delta: str) -> str:
+        self.buffer += delta
+        if not self.buffer.strip():
+            return ""
+        parsed = from_json(
+            self.buffer, allow_partial="trailing-strings", allow_inf_nan=False
+        )
+        if not isinstance(parsed, dict):
+            raise RuntimeError("The streamed policy answer must be a JSON object")
+        current = parsed.get("answer", "")
+        if not isinstance(current, str) or not current.startswith(self.text):
+            raise RuntimeError("The streamed answer is not a consistent text value")
+        addition = current[len(self.text) :]
+        self.text = current
+        return addition
+
+
+def stream_answer(
+    generation_input: str, references: list[dict[str, Any]]
+) -> ResponseStream[str, tuple[str, list[dict[str, Any]]]]:
+    response_stream = generation_agent.run(
+        generation_input,
+        stream=True,
+        options={"response_format": PolicyAnswer},
+    )
+    decoder = _AnswerTextDecoder()
+
+    def decode(update: AgentResponseUpdate) -> list[str]:
+        delta = decoder.append(update.text) if update.text else ""
+        return [delta] if delta else []
+
+    async def finalize(
+        _updates: Sequence[str],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        response = await response_stream.get_final_response()
+        answer, selected = select_answer_sources(response.value, references)
+        if answer != decoder.text.strip():
+            raise RuntimeError("The completed answer differs from its streamed text")
+        return answer, selected
+
+    return response_stream.flat_map(decode, finalize)
+
+
 async def answer_question(
     question: str,
     user_search_token: str,
@@ -248,18 +370,16 @@ async def answer_question(
 
     if on_progress:
         await on_progress("Preparing the answer...")
-    result = await generation_agent.run(
+    answer, selected = await generate_answer(
         build_generation_input(
             question=question,
             previous_questions=history,
             local_regions=decision.regions,
             compact_evidence=compact_evidence,
-        )
+        ),
+        references,
     )
-    answer = result.text.strip()
-    if not answer:
-        raise RuntimeError("The generation model returned an empty answer")
-    return answer, build_citations(references)[:4]
+    return answer, build_citations(selected)
 
 
 def unique_references(

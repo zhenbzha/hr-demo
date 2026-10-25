@@ -4,7 +4,7 @@ param accountName string
 param classifierDeploymentName string
 param classifierModelCapacity int = 10
 param generationDeploymentName string
-param generationModelCapacity int = 10
+param generationModelCapacity int = 100
 param location string
 param projectName string
 param tags object = {}

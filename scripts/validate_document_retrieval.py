@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Run document-level retrieval regressions against the Ask HR Search index."""
+"""Check expected documents in hybrid Search results."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from index_hr_documents import (
-    DEFAULT_INDEX_NAME,
-    DEFAULT_VECTOR_DIMENSIONS,
+from azure.core.credentials import TokenCredential
+from azure.identity import AzureCliCredential
+from ingestion.azure_http import (
     SEARCH_API_VERSION,
-    access_token,
-    azd_values,
-    embedding_url,
+    SEARCH_SCOPE,
+    authorization_headers,
     request_json,
 )
-
+from ingestion.search_index import embed_documents
+from ingestion.search_schema import (
+    DEFAULT_INDEX_NAME,
+    DEFAULT_VECTOR_DIMENSIONS,
+)
 
 RUNNABLE_CASE_IDS = {
     "DOC-REGION-001",
@@ -28,14 +32,7 @@ RUNNABLE_CASE_IDS = {
     "DOC-KNOWN-002",
     "DOC-COMPARE-001",
 }
-
-
-def search_headers() -> dict[str, str]:
-    return {
-        "Authorization": (
-            "Bearer " + access_token("https://search.azure.com/.default")
-        )
-    }
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def embed_query(
@@ -44,19 +41,17 @@ def embed_query(
     deployment: str,
     dimensions: int,
     query: str,
+    credential: TokenCredential,
 ) -> list[float]:
-    _, _, result = request_json(
-        "POST",
-        embedding_url(endpoint, deployment),
-        headers={
-            "Authorization": (
-                "Bearer "
-                + access_token("https://cognitiveservices.azure.com/.default")
-            )
-        },
-        json_body={"input": [query], "dimensions": dimensions},
+    document: dict[str, Any] = {"semantic_text": query}
+    embed_documents(
+        documents=[document],
+        endpoint=endpoint,
+        deployment=deployment,
+        dimensions=dimensions,
+        credential=credential,
     )
-    return result["data"][0]["embedding"]
+    return document["chunk_vector"]
 
 
 def run_case(
@@ -67,6 +62,7 @@ def run_case(
     openai_endpoint: str,
     embedding_deployment: str,
     dimensions: int,
+    credential: TokenCredential,
 ) -> dict[str, Any]:
     query = case["query"]
     vector = embed_query(
@@ -74,6 +70,7 @@ def run_case(
         deployment=embedding_deployment,
         dimensions=dimensions,
         query=query,
+        credential=credential,
     )
     url = (
         f"{search_endpoint.rstrip('/')}/indexes/"
@@ -83,7 +80,7 @@ def run_case(
     _, _, result = request_json(
         "POST",
         url,
-        headers=search_headers(),
+        headers=authorization_headers(credential, SEARCH_SCOPE),
         json_body={
             "search": query,
             "queryType": "semantic",
@@ -94,7 +91,7 @@ def run_case(
                     "kind": "vector",
                     "vector": vector,
                     "fields": "chunk_vector",
-                    "k": 20,
+                    "k": 50,
                 }
             ],
             "select": (
@@ -105,7 +102,9 @@ def run_case(
             "count": True,
         },
     )
-    values = result.get("value", [])
+    values = result.get("value")
+    if not isinstance(values, list):
+        raise RuntimeError(f"{case['id']}: Search returned no result array")
     document_ids = {value["document_id"] for value in values}
     regions = {value["region"] for value in values}
 
@@ -121,16 +120,14 @@ def run_case(
     unexpected_ids = forbidden_ids & document_ids
     if unexpected_ids:
         raise RuntimeError(
-            f"{case['id']} returned forbidden documents "
-            f"{sorted(unexpected_ids)}"
+            f"{case['id']} returned forbidden documents {sorted(unexpected_ids)}"
         )
 
     forbidden_regions = set(case.get("forbiddenRegions", []))
     unexpected_regions = forbidden_regions & regions
     if unexpected_regions:
         raise RuntimeError(
-            f"{case['id']} returned forbidden regions "
-            f"{sorted(unexpected_regions)}"
+            f"{case['id']} returned forbidden regions {sorted(unexpected_regions)}"
         )
 
     return {
@@ -155,7 +152,10 @@ def run_case(
 
 
 def validate_no_dovetail(
-    *, search_endpoint: str, index_name: str
+    *,
+    search_endpoint: str,
+    index_name: str,
+    credential: TokenCredential,
 ) -> dict[str, Any]:
     url = (
         f"{search_endpoint.rstrip('/')}/indexes/"
@@ -165,7 +165,7 @@ def validate_no_dovetail(
     _, _, result = request_json(
         "POST",
         url,
-        headers=search_headers(),
+        headers=authorization_headers(credential, SEARCH_SCOPE),
         json_body={
             "search": "Dovetail",
             "queryType": "simple",
@@ -175,7 +175,9 @@ def validate_no_dovetail(
             "count": True,
         },
     )
-    count = int(result.get("@odata.count", 0))
+    count = result.get("@odata.count")
+    if type(count) is not int or count < 0:
+        raise RuntimeError("Stale-link validation requires a valid Search result count")
     if count:
         raise RuntimeError(
             f"DOC-STALE-LINK-001 found {count} chunks containing Dovetail"
@@ -193,14 +195,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cases",
         type=Path,
-        default=Path("tests/document-retrieval-cases.json"),
+        default=PROJECT_ROOT / "tests" / "document-retrieval-cases.json",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/ingestion/document-retrieval-validation.json"),
+        default=(
+            PROJECT_ROOT / "output" / "ingestion" / "document-retrieval-validation.json"
+        ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--search-endpoint",
+        default=os.environ.get("AZURE_SEARCH_ENDPOINT"),
+    )
+    parser.add_argument(
+        "--index-name",
+        default=os.environ.get("AZURE_SEARCH_INDEX_NAME", DEFAULT_INDEX_NAME),
+    )
+    parser.add_argument(
+        "--openai-endpoint",
+        default=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+    )
+    parser.add_argument(
+        "--embedding-deployment",
+        default=os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
+    )
+    parser.add_argument(
+        "--embedding-dimensions",
+        type=int,
+        default=int(
+            os.environ.get(
+                "AZURE_OPENAI_EMBEDDING_DIMENSIONS",
+                DEFAULT_VECTOR_DIMENSIONS,
+            )
+        ),
+    )
+    args = parser.parse_args()
+    required = {
+        "--search-endpoint or AZURE_SEARCH_ENDPOINT": args.search_endpoint,
+        "--openai-endpoint or AZURE_OPENAI_ENDPOINT": args.openai_endpoint,
+        "--embedding-deployment or AZURE_OPENAI_EMBEDDING_DEPLOYMENT": (
+            args.embedding_deployment
+        ),
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        parser.error("Missing required configuration: " + ", ".join(missing))
+    return args
 
 
 def main() -> None:
@@ -208,42 +249,29 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
     cases_payload = json.loads(args.cases.read_text(encoding="utf-8"))
-    cases = [
-        case
-        for case in cases_payload["cases"]
-        if case["id"] in RUNNABLE_CASE_IDS
-    ]
-    values = azd_values()
-    search_endpoint = values["AZURE_SEARCH_ENDPOINT"]
-    index_name = values.get("AZURE_SEARCH_INDEX_NAME", DEFAULT_INDEX_NAME)
-    openai_endpoint = values["AZURE_OPENAI_ENDPOINT"]
-    embedding_deployment = values["AZURE_OPENAI_EMBEDDING_DEPLOYMENT"]
-    dimensions = int(
-        values.get(
-            "AZURE_OPENAI_EMBEDDING_DIMENSIONS",
-            DEFAULT_VECTOR_DIMENSIONS,
+    cases = [case for case in cases_payload["cases"] if case["id"] in RUNNABLE_CASE_IDS]
+    with AzureCliCredential() as credential:
+        results = [
+            run_case(
+                case=case,
+                search_endpoint=args.search_endpoint,
+                index_name=args.index_name,
+                openai_endpoint=args.openai_endpoint,
+                embedding_deployment=args.embedding_deployment,
+                dimensions=args.embedding_dimensions,
+                credential=credential,
+            )
+            for case in cases
+        ]
+        results.append(
+            validate_no_dovetail(
+                search_endpoint=args.search_endpoint,
+                index_name=args.index_name,
+                credential=credential,
+            )
         )
-    )
-
-    results = [
-        run_case(
-            case=case,
-            search_endpoint=search_endpoint,
-            index_name=index_name,
-            openai_endpoint=openai_endpoint,
-            embedding_deployment=embedding_deployment,
-            dimensions=dimensions,
-        )
-        for case in cases
-    ]
-    results.append(
-        validate_no_dovetail(
-            search_endpoint=search_endpoint,
-            index_name=index_name,
-        )
-    )
     output = {
-        "indexName": index_name,
+        "indexName": args.index_name,
         "passed": len(results),
         "failed": 0,
         "results": results,
