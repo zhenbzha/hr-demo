@@ -14,7 +14,7 @@ The current stage provisions the isolated `rg-ask-hr-demo` environment,
 including:
 
 - Microsoft Foundry account and project;
-- `gpt-4.1-mini`, `gpt-6.1-sol`, and `text-embedding-3-large`
+- `gpt-4.1-mini`, `gpt-6-astra`, `gpt-6.1-sol`, and `text-embedding-3-large`
   deployments;
 - Azure AI Search;
 - Document Intelligence;
@@ -25,9 +25,19 @@ including:
 Application and ingestion code is added only after infrastructure validation
 and deployment succeed.
 
-The shared generation/judge deployment is configured for 100,000 tokens per
-minute (`GlobalStandard` capacity 100). Bicep and the agent's `azure.yaml` keep
-this allocation aligned; the classifier remains at capacity 10.
+Search remains on the Basic SKU with one replica and one partition. Semantic
+ranker uses Standard usage-based billing after the monthly free allowance.
+This is separate from Foundry IQ knowledge-retrieval billing for the configured
+Search API. See [semantic-ranker billing](https://learn.microsoft.com/en-us/azure/search/semantic-how-to-enable-disable).
+
+The main generation and judge deployments are each configured for 100,000
+tokens per minute (`GlobalStandard` capacity 100). Bicep and the agent's
+`azure.yaml` keep these allocations aligned; the classifier remains at capacity 10.
+
+The root post-provisioning hook, `scripts\provision_entra.ps1`, validates the
+model outputs before making Azure changes. It synchronizes the main, Activity,
+judge, and classifier model bindings to `ASK_HR_AGENT_ENV_NAME` (default
+`ask-hr-dev`) in the nested `ask-hr` project, including existing environments.
 
 ## Document schema review
 
@@ -45,18 +55,25 @@ output budgets (12 documents and 12,000 tokens). An explicit reranker-score floo
 of 1.5 retains relevant partial matches while excluding weaker matches. This is
 a demo-calibrated setting, not an Azure default or a guarantee of answer quality.
 The application forwards all returned policy chunks to answer generation. The
-model returns the employee answer and the IDs of its supporting passages;
-application code validates those IDs against the supplied evidence and attaches
+model returns the employee answer and the IDs of its supporting passages. Each
+request's structured response schema restricts IDs to the passages supplied to
+generation; application code also validates the final selection and attaches
 only the selected sources as citations, without a separate citation-count cap.
 Only answer text is streamed to the employee, not the internal source metadata.
-If no applicable policy information is available, Ask HR gives a short HR
-follow-up message without inventing approval or prohibition and without attaching
+If no applicable policy information is available, Ask HR explicitly states that
+the available information does not cover the request and directs the employee
+to HR, without inventing approval or prohibition and without attaching
 unrelated citations. Empty retrieval results take this deterministic path without
 an additional generation call.
 
-Answer generation uses medium reasoning; classification remains a separate
-lightweight call. The answer-generation prompt requires source-faithful
-quantities, units, and inclusive/exclusive limits when translating or summarizing.
+The main agent uses GPT-6 Astra with high reasoning; classification remains a
+separate lightweight call. GPT-6.1 Sol remains the evaluation judge and the
+Activity POC model, with separate environment bindings so a main-agent model
+change does not silently switch either. The answer-generation prompt requires
+source-faithful quantities, units, and inclusive/exclusive limits when translating
+or summarizing.
+It also requires coverage of applicable policy conditions and document-wide
+qualifications, without narrowing legal or contractual precedence statements.
 Missing local passages do not establish that no local policy exists: Global
 baselines remain explicitly labeled and are not confirmed local entitlements.
 

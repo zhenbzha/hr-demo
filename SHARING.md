@@ -235,7 +235,7 @@ Set values from `scripts\evaluation.env.example` in the shell. The file is a
 template, not an automatically loaded environment file. Required variables:
 
 - `FOUNDRY_PROJECT_ENDPOINT`
-- `AZURE_AI_MODEL_DEPLOYMENT_NAME` (the judge deployment)
+- `ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME` (the judge deployment)
 - `AGENT_ASK_HR_RESPONSES_ENDPOINT`
 - `ASK_HR_AGENT_NAME`
 - `ASK_HR_AGENT_VERSION`
@@ -245,6 +245,10 @@ Optional labels are `ASK_HR_KNOWLEDGE_BASE`, `ASK_HR_EVAL_DATASET_NAME`, and
 `ASK_HR_EVALUATION_NAME`. An active, unversioned agent endpoint does not prove
 that it serves the supplied version label; the report distinguishes this from
 a versioned endpoint.
+
+`--model-deployment` overrides the judge environment setting. Existing callers
+can still use `AZURE_AI_MODEL_DEPLOYMENT_NAME` as a fallback, but set the dedicated
+judge variable to keep GPT-6.1 Sol fixed when generation uses GPT-6 Astra.
 
 ```powershell
 uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py
@@ -297,9 +301,11 @@ then record that review in the manifest before scoring:
   --replay-cases tests\agent-evaluator-reference-cases-v2.json `
   --prepare-replay `
   --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
-  --model-deployment $env:AZURE_AI_MODEL_DEPLOYMENT_NAME `
   --output-dir ask-hr\src\ask-hr\.foundry
 ```
+
+This command uses the dedicated judge setting above, which must match the judge
+recorded in the saved captures.
 
 Run the same command without `--prepare-replay` after recording the review basis.
 `approved` denotes human reference review. When the user supplies the governing
@@ -392,9 +398,15 @@ policy context supplied to generation. It reuses the same case checks and
 Foundry scoring code as the hosted-endpoint evaluator, rather than relying on
 hard-coded answer substring checks. It does not change Search or agent bindings.
 New captures also retain the generation and classification instruction text next
-to their hashes, the generation reasoning effort, and its response schema.
-Generation uses medium reasoning to improve coverage of the supplied policies;
-keep this setting fixed when testing ingestion or retrieval changes.
+to their hashes, the generation reasoning effort, and a response-schema template.
+Each generated case records its actual response schema, including the allowed
+source IDs, before answer-source selection. Cases that skip generation record no
+generation schema.
+The main agent uses GPT-6 Astra with high reasoning to improve coverage of the
+supplied policies; keep this setting fixed when testing ingestion or retrieval changes.
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` selects main-agent generation,
+`ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME` selects the judge, and
+`AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME` keeps the Activity POC on GPT-6.1 Sol.
 Normal benchmark scoring, like reference replay, uses the recorded generation
 conversation for relevance, groundedness, and intent resolution. It verifies the
 instruction hash and agreement between the recorded question, policy context,
@@ -414,10 +426,12 @@ This retains semantic ordering and does not change the LLM evaluation thresholds
 The knowledge base controls the document and token budgets through
 `retrieveDefaults` (12 documents and 12,000 tokens).
 Neither the request nor evidence compaction imposes a separate five-chunk cap.
-All returned passages reach generation. The model returns a structured employee
-answer and supporting passage IDs; the application validates those IDs and
-attaches only the selected sources, with no separate citation-count cap. Unknown
-IDs, missing sources for a policy answer, and malformed or incomplete output fail
+All returned nonempty passages reach generation. The model returns a structured
+employee answer and supporting passage IDs. Each request constrains those IDs to
+the supplied passages through a string enum in the structured response schema;
+JSON parsing and the final source-selection guard both enforce membership.
+The application attaches only the selected sources, with no separate citation-count
+cap. Unknown IDs, missing sources for a policy answer, and malformed or incomplete output fail
 explicitly. The Responses path streams only decoded answer text and validates
 the completed result; both adapters and the benchmark use the same source
 selection. Source-ID validation proves membership in the supplied evidence, not

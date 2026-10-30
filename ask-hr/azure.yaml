@@ -28,6 +28,14 @@ services:
         sku:
           name: GlobalStandard
           capacity: 100
+      - name: ask-hr-gpt-6-astra
+        model:
+          format: OpenAI
+          name: gpt-6-astra
+          version: "2026-09-03"
+        sku:
+          name: GlobalStandard
+          capacity: 100
 
   ask-hr:
     host: azure.ai.agent
@@ -83,7 +91,7 @@ services:
         - type: BotServiceRbac
     env:
       AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME}
-      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME}
       AZURE_SEARCH_ENDPOINT: ${AZURE_SEARCH_ENDPOINT}
       AZURE_SEARCH_KNOWLEDGE_BASE_NAME: ${AZURE_SEARCH_KNOWLEDGE_BASE}
       AZURE_SEARCH_KNOWLEDGE_SOURCE_NAME: ${AZURE_SEARCH_KNOWLEDGE_SOURCE}

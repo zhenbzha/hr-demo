@@ -16,7 +16,7 @@ module search 'br/public:avm/res/search/search-service:0.13.0' = {
     partitionCount: 1
     publicNetworkAccess: 'Enabled'
     replicaCount: 1
-    semanticSearch: 'free'
+    semanticSearch: 'standard'
     sku: 'basic'
     tags: tags
   }

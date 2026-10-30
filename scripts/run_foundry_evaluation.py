@@ -37,9 +37,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--model-deployment",
+        default=os.environ.get("ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME")
+        or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME"),
+        help=(
+            "Judge deployment, or set ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME. "
+            "Falls back to AZURE_AI_MODEL_DEPLOYMENT_NAME for existing callers."
+        ),
+    )
     for option, variable, fallback in (
         ("project-endpoint", "FOUNDRY_PROJECT_ENDPOINT", None),
-        ("model-deployment", "AZURE_AI_MODEL_DEPLOYMENT_NAME", None),
         ("agent-endpoint", "AGENT_ASK_HR_RESPONSES_ENDPOINT", None),
         ("agent-name", "ASK_HR_AGENT_NAME", "ask-hr"),
         ("agent-version", "ASK_HR_AGENT_VERSION", None),

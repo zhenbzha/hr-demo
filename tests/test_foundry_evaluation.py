@@ -1,5 +1,6 @@
 """Offline collection and Foundry SDK contract tests for the manual evaluator."""
 
+import argparse
 import hashlib
 import json
 import tempfile
@@ -377,6 +378,34 @@ class FoundryResultTests(unittest.TestCase):
 
 
 class ManualRunnerTests(unittest.TestCase):
+    def test_judge_deployment_is_independent_of_generation(self):
+        with patch.dict(
+            runner.os.environ,
+            {
+                "AZURE_AI_MODEL_DEPLOYMENT_NAME": "generation",
+                "ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME": "judge",
+            },
+            clear=True,
+        ):
+            parser = argparse.ArgumentParser()
+            runner._add_identity_arguments(parser)
+        self.assertEqual(parser.parse_args([]).model_deployment, "judge")
+        self.assertEqual(
+            parser.parse_args(["--model-deployment", "explicit-judge"]).model_deployment,
+            "explicit-judge",
+        )
+
+    def test_judge_deployment_keeps_the_legacy_environment_fallback(self):
+        for configured in (None, ""):
+            with self.subTest(configured=configured):
+                environment = {"AZURE_AI_MODEL_DEPLOYMENT_NAME": "legacy-judge"}
+                if configured is not None:
+                    environment["ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME"] = configured
+                with patch.dict(runner.os.environ, environment, clear=True):
+                    parser = argparse.ArgumentParser()
+                    runner._add_identity_arguments(parser)
+                self.assertEqual(parser.parse_args([]).model_deployment, "legacy-judge")
+
     @staticmethod
     def arguments(root: Path) -> SimpleNamespace:
         cases_path = root / "cases.json"

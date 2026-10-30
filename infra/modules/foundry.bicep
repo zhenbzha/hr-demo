@@ -3,6 +3,8 @@ targetScope = 'resourceGroup'
 param accountName string
 param classifierDeploymentName string
 param classifierModelCapacity int = 10
+param evaluationDeploymentName string
+param evaluationModelCapacity int = 100
 param generationDeploymentName string
 param generationModelCapacity int = 100
 param location string
@@ -35,8 +37,22 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.1' = {
           name: 'gpt-6.1-sol'
           version: '2026-09-29'
         }
+        name: evaluationDeploymentName
+        raiPolicyName: 'Microsoft.DefaultV2'
+        sku: {
+          capacity: evaluationModelCapacity
+          name: 'GlobalStandard'
+        }
+      }
+      {
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-6-astra'
+          version: '2026-09-03'
+        }
         name: generationDeploymentName
         raiPolicyName: 'Microsoft.DefaultV2'
+        versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
         sku: {
           capacity: generationModelCapacity
           name: 'GlobalStandard'
@@ -97,6 +113,7 @@ output accountName string = account.outputs.name
 output accountPrincipalId string = account.outputs.?systemAssignedMIPrincipalId ?? ''
 output classifierDeploymentName string = classifierDeploymentName
 output embeddingDeploymentName string = embeddingDeploymentName
+output evaluationDeploymentName string = evaluationDeploymentName
 output generationDeploymentName string = generationDeploymentName
 output openAiEndpoint string = 'https://${account.outputs.name}.openai.azure.com'
 output projectEndpoint string = 'https://${account.outputs.name}.services.ai.azure.com/api/projects/${project.name}'

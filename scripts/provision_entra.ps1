@@ -48,7 +48,12 @@ $resourceGroup = Invoke-AzdValue 'AZURE_RESOURCE_GROUP'
 $tenantId = Invoke-AzdValue 'AZURE_TENANT_ID'
 $containerAppName = Invoke-AzdValue 'SERVICE_WEB_NAME'
 $foundryAgentEndpoint = Invoke-AzdValue 'FOUNDRY_AGENT_ENDPOINT'
-$classifierDeploymentName = Invoke-AzdValue 'AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME'
+$agentModelDeployments = [ordered]@{
+    AZURE_AI_MODEL_DEPLOYMENT_NAME = Invoke-AzdValue 'AZURE_AI_MODEL_DEPLOYMENT_NAME'
+    AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME = Invoke-AzdValue 'AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME'
+    ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME = Invoke-AzdValue 'ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME'
+    AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME = Invoke-AzdValue 'AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME'
+}
 $agentEnvironmentName = azd env get-value ASK_HR_AGENT_ENV_NAME 2>$null
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agentEnvironmentName)) {
     $agentEnvironmentName = 'ask-hr-dev'
@@ -290,9 +295,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to synchronize the Ask HR web URL to the agent environment.'
 }
 
-azd env set -C ask-hr -e $agentEnvironmentName AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME $classifierDeploymentName
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to synchronize the classifier deployment to the agent environment.'
+foreach ($deployment in $agentModelDeployments.GetEnumerator()) {
+    azd env set -C ask-hr -e $agentEnvironmentName $deployment.Key $deployment.Value
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to synchronize '$($deployment.Key)' to the agent environment."
+    }
 }
 
 Write-Host "Configured Ask HR Entra application $clientId."

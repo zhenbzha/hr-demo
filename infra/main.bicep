@@ -74,7 +74,8 @@ module foundry './modules/foundry.bicep' = {
   params: {
     accountName: 'aif-askhr-${resourceToken}'
     classifierDeploymentName: 'ask-hr-gpt-4.1-mini'
-    generationDeploymentName: 'ask-hr-gpt-6.1-sol'
+    evaluationDeploymentName: 'ask-hr-gpt-6.1-sol'
+    generationDeploymentName: 'ask-hr-gpt-6-astra'
     generationModelCapacity: 100
     location: location
     projectName: 'ask-hr-project'
@@ -179,6 +180,8 @@ output AZURE_AI_PROJECT_NAME string = foundry.outputs.projectName
 output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
 output AZURE_AI_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint
 output AZURE_AI_MODEL_DEPLOYMENT_NAME string = foundry.outputs.generationDeploymentName
+output AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME string = foundry.outputs.evaluationDeploymentName
+output ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME string = foundry.outputs.evaluationDeploymentName
 output AZURE_OPENAI_ENDPOINT string = foundry.outputs.openAiEndpoint
 output AZURE_OPENAI_EMBEDDING_DEPLOYMENT string = foundry.outputs.embeddingDeploymentName
 output AZURE_OPENAI_EMBEDDING_DIMENSIONS int = 1024

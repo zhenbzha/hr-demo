@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable, Sequence
+from enum import StrEnum
 from typing import Any
 from urllib.parse import quote
 
@@ -24,7 +25,7 @@ from permission_contract import (
     compact_search_evidence,
     validated_search_endpoint,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic_core import from_json
 from region_classification import (
     RegionDecision,
@@ -36,12 +37,12 @@ load_dotenv()
 
 SEARCH_SCOPE = "https://search.azure.com/.default"
 NO_ACCESSIBLE_EVIDENCE = (
-    "I can't confirm this from the available HR policy information. "
+    "The available HR policy information does not cover this request. "
     "Please check with your HR team for confirmation. "
     "Missing information does not mean that a request or expense is approved or prohibited."
 )
 MAX_QUESTION_LENGTH = 4_000
-GENERATION_REASONING_EFFORT = "medium"
+GENERATION_REASONING_EFFORT = "high"
 
 
 class PolicyAnswer(BaseModel):
@@ -78,9 +79,16 @@ never policy evidence. Local policy takes precedence over Global baseline
 content for the same topic. Global content can supplement topics not covered
 in the supplied local evidence.
 
-Preserve source meaning when translating or summarizing. Before finalizing,
-silently check every claim, including every table cell, against its own source
-scope, units, conditions, and exceptions. For every quantitative limit, establish
+Preserve source meaning when translating or summarizing. Include the relevant
+policy facts and their conditions, together with document-wide qualifications
+that govern their use. Preserve the full scope of statements about whether
+policies are binding and which legal, contractual, or policy terms take
+precedence; do not narrow a document-wide qualification to selected examples.
+
+Before finalizing, silently check coverage in both directions: no relevant
+requested fact or applicable qualification is omitted, and every answer claim,
+including every table cell, matches its own source scope, units, conditions,
+and exceptions. For every quantitative limit, establish
 the source comparison relation, translate it using unmistakably inclusive or
 exclusive wording, and verify that the original and translated statements have
 the same truth value at the boundary itself. Do not use colloquial approximations
@@ -240,7 +248,18 @@ def extract_references(
 def prepare_evidence(
     evidence: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    return extract_references(evidence), compact_search_evidence(evidence)
+    compact_evidence = compact_search_evidence(evidence)
+    supplied_ids = {
+        reference["source_id"]
+        for item in compact_evidence
+        for reference in item["references"]
+    }
+    references = [
+        reference
+        for reference in unique_references(extract_references(evidence))
+        if reference["sourceData"]["chunk_id"] in supplied_ids
+    ]
+    return references, compact_evidence
 
 
 def build_generation_input(
@@ -259,6 +278,29 @@ def build_generation_input(
             "authorized_evidence": compact_evidence,
         },
         ensure_ascii=False,
+    )
+
+
+def build_answer_response_format(
+    references: list[dict[str, Any]],
+) -> type[PolicyAnswer]:
+    identifiers = [
+        reference["sourceData"]["chunk_id"]
+        for reference in unique_references(references)
+    ]
+    if not identifiers:
+        raise ValueError("Answer generation requires at least one policy source")
+    source_id_type = StrEnum(
+        "PolicySourceId",
+        {f"SOURCE_{index}": identifier for index, identifier in enumerate(identifiers)},
+    )
+    return create_model(
+        "EvidencePolicyAnswer",
+        __base__=PolicyAnswer,
+        source_ids=(
+            list[source_id_type],
+            Field(description=PolicyAnswer.model_fields["source_ids"].description),
+        ),
     )
 
 
@@ -293,7 +335,8 @@ async def generate_answer(
     generation_input: str, references: list[dict[str, Any]]
 ) -> tuple[str, list[dict[str, Any]]]:
     result = await generation_agent.run(
-        generation_input, options={"response_format": PolicyAnswer}
+        generation_input,
+        options={"response_format": build_answer_response_format(references)},
     )
     return select_answer_sources(result.value, references)
 
@@ -326,7 +369,7 @@ def stream_answer(
     response_stream = generation_agent.run(
         generation_input,
         stream=True,
-        options={"response_format": PolicyAnswer},
+        options={"response_format": build_answer_response_format(references)},
     )
     decoder = _AnswerTextDecoder()
 

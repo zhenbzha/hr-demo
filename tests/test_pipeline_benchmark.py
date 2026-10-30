@@ -40,7 +40,7 @@ def pipeline_fixture(*, status="retrieve", answer="14 paid working days"):
     return SimpleNamespace(
         GLOBAL_REGION="global",
         NO_ACCESSIBLE_EVIDENCE=(
-            "I can't confirm this from the available HR policy information. "
+            "The available HR policy information does not cover this request. "
             "Please check with your HR team for confirmation. "
             "Missing information does not mean that a request or expense is approved or prohibited."
         ),
@@ -48,6 +48,13 @@ def pipeline_fixture(*, status="retrieve", answer="14 paid working days"):
         GENERATION_REASONING_EFFORT="low",
         PolicyAnswer=SimpleNamespace(
             model_json_schema=Mock(return_value={"type": "object"})
+        ),
+        build_answer_response_format=Mock(
+            return_value=SimpleNamespace(
+                model_json_schema=Mock(
+                    return_value={"type": "object", "title": "CaseSpecificAnswer"}
+                )
+            )
         ),
         CLASSIFICATION_INSTRUCTIONS="Classify the region.",
         classify_regions=AsyncMock(
@@ -99,8 +106,10 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["retrieval_evidence"], [])
         self.assertEqual(result["searchSeconds"], 0)
         self.assertEqual(result["generationSeconds"], 0)
+        self.assertIsNone(result["generation_response_schema"])
         pipeline.retrieve_authorized_evidence.assert_not_awaited()
         pipeline.generate_answer.assert_not_awaited()
+        pipeline.build_answer_response_format.assert_not_called()
 
     async def test_scores_the_generated_answer_with_its_actual_compact_context(self):
         pipeline = pipeline_fixture()
@@ -125,6 +134,11 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["response_id_origin"], "local_execution_not_hosted_response"
         )
+        pipeline.build_answer_response_format.assert_called_once_with(references)
+        self.assertEqual(
+            result["generation_response_schema"],
+            {"type": "object", "title": "CaseSpecificAnswer"},
+        )
         pipeline.generate_answer.assert_awaited_once_with(
             result["generation_input"], references
         )
@@ -132,6 +146,34 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
             pipeline.retrieve_authorized_evidence.call_args.kwargs["regions"],
             ["hongkong", "global"],
         )
+
+    async def test_response_schema_is_captured_before_selecting_answer_sources(self):
+        pipeline = pipeline_fixture()
+        references, _ = pipeline.prepare_evidence.return_value
+        references.append(source_reference("second-policy"))
+        pipeline.generate_answer.return_value = ("14 paid working days", references[:1])
+        result = await benchmark.run_case(
+            pipeline=pipeline, case=case_fixture(), user_search_token="test-token"
+        )
+        pipeline.build_answer_response_format.assert_called_once_with(references)
+        self.assertEqual(len(result["citations"]), 1)
+        self.assertEqual(
+            result["generation_response_schema"],
+            pipeline.build_answer_response_format.return_value.model_json_schema(),
+        )
+
+    async def test_empty_evidence_has_no_generation_schema(self):
+        pipeline = pipeline_fixture()
+        pipeline.prepare_evidence.return_value = ([], [])
+        result = await benchmark.run_case(
+            pipeline=pipeline,
+            case=case_fixture(expectedDocumentIds=[], expectedCitationCount=0),
+            user_search_token="test-token",
+        )
+        self.assertEqual(result["response"], pipeline.NO_ACCESSIBLE_EVIDENCE)
+        self.assertIsNone(result["generation_response_schema"])
+        pipeline.generate_answer.assert_not_awaited()
+        pipeline.build_answer_response_format.assert_not_called()
 
     async def test_deterministic_failure_does_not_discard_answer_or_latency(self):
         result = await benchmark.run_case(
@@ -409,6 +451,14 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(summary["quality"]["behavioral_adherence"]["passed"], 1)
         self.assertEqual(summary["binding"]["indexName"], "candidate-index")
         self.assertEqual(summary["agent"]["generation_instructions"], "Use the policy.")
+        self.assertEqual(
+            summary["agent"]["generation_response_schema_template"], {"type": "object"}
+        )
+        self.assertNotIn("generation_response_schema", summary["agent"])
+        self.assertEqual(
+            summary["results"][0]["generation_response_schema"],
+            {"type": "object", "title": "CaseSpecificAnswer"},
+        )
         self.assertEqual(
             summary["agent"]["classification_instructions"], "Classify the region."
         )

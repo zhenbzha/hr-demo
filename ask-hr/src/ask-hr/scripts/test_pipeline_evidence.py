@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from agent_framework import AgentResponse, AgentResponseUpdate, Content, ResponseStream
+from pydantic import ValidationError
 from region_classification import RegionDecision
 
 with (
@@ -39,7 +40,10 @@ with patch.object(
     import validate_hosted_agent as hosted_validator
 
 
-def model_stream(payload: str) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
+def model_stream(
+    payload: str,
+    response_format: type[pipeline.PolicyAnswer] = pipeline.PolicyAnswer,
+) -> ResponseStream[AgentResponseUpdate, AgentResponse]:
     async def updates():
         for character in payload:
             yield AgentResponseUpdate(
@@ -49,20 +53,28 @@ def model_stream(payload: str) -> ResponseStream[AgentResponseUpdate, AgentRespo
     return ResponseStream(
         updates(),
         finalizer=lambda updates: AgentResponse.from_updates(
-            updates, output_format_type=pipeline.PolicyAnswer
+            updates, output_format_type=response_format
         ),
     )
 
 
+def mock_streaming_generation(payload: str) -> Mock:
+    return Mock(
+        side_effect=lambda *args, **kwargs: model_stream(
+            payload, kwargs["options"]["response_format"]
+        )
+    )
+
+
 class GenerationConfigurationTests(unittest.TestCase):
-    def test_generation_uses_medium_reasoning_without_storing_responses(self) -> None:
+    def test_generation_uses_high_reasoning_without_storing_responses(self) -> None:
         options = next(
             call.kwargs["default_options"]
             for call in agent_factory.call_args_list
             if call.kwargs.get("name") == "AskHR"
         )
-        self.assertEqual(pipeline.GENERATION_REASONING_EFFORT, "medium")
-        self.assertEqual(options, {"store": False, "reasoning": {"effort": "medium"}})
+        self.assertEqual(pipeline.GENERATION_REASONING_EFFORT, "high")
+        self.assertEqual(options, {"store": False, "reasoning": {"effort": "high"}})
 
 
 class HostedValidationContractTests(unittest.TestCase):
@@ -162,9 +174,12 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(citations), 12)
         self.assertEqual(citations[-1]["label"], "Policy 11")
+        response_format = self.generate.await_args.kwargs["options"]["response_format"]
+        self.assertTrue(issubclass(response_format, pipeline.PolicyAnswer))
+        schema = response_format.model_json_schema()
         self.assertEqual(
-            self.generate.await_args.kwargs["options"],
-            {"response_format": pipeline.PolicyAnswer},
+            schema["$defs"]["PolicySourceId"]["enum"],
+            [f"chunk-{index}" for index in range(12)],
         )
         self.retrieve.assert_awaited_once_with(
             question="Question",
@@ -183,16 +198,58 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
             (pipeline.NO_ACCESSIBLE_EVIDENCE, []),
         )
 
+    async def test_generation_schema_rejects_unsupplied_source_ids(self) -> None:
+        await pipeline.answer_question("Question", "delegated-token")
+        response_format = self.generate.await_args.kwargs["options"]["response_format"]
+        with self.assertRaises(ValidationError):
+            response_format.model_validate_json(
+                '{"answer":"Answer","source_ids":["not-authorized"]}'
+            )
+
+    async def test_sources_without_usable_content_are_not_available_to_generation(
+        self,
+    ) -> None:
+        self.references[1]["sourceData"]["chunk_text"] = " "
+        self.references[2]["sourceData"]["chunk_text"] = None
+        self.generate.return_value.value.source_ids = ["chunk-0"]
+        await pipeline.answer_question("Question", "delegated-token")
+        model_input = json.loads(self.generate.await_args.args[0])
+        supplied_ids = [
+            reference["source_id"]
+            for item in model_input["authorized_evidence"]
+            for reference in item["references"]
+        ]
+        self.assertEqual(
+            supplied_ids, ["chunk-0", *[f"chunk-{index}" for index in range(3, 12)]]
+        )
+        response_format = self.generate.await_args.kwargs["options"]["response_format"]
+        self.assertEqual(
+            response_format.model_json_schema()["$defs"]["PolicySourceId"]["enum"],
+            supplied_ids,
+        )
+        self.generate.return_value.value.source_ids = ["chunk-1"]
+        with self.assertRaisesRegex(RuntimeError, "outside its supplied evidence"):
+            await pipeline.answer_question("Question", "delegated-token")
+
     async def test_empty_evidence_skips_generation(self) -> None:
         self.retrieve.return_value = []
         self.assertEqual(
             await pipeline.answer_question("Question", "delegated-token"),
             (
-                "I can't confirm this from the available HR policy information. "
+                "The available HR policy information does not cover this request. "
                 "Please check with your HR team for confirmation. "
                 "Missing information does not mean that a request or expense is approved or prohibited.",
                 [],
             ),
+        )
+        self.generate.assert_not_awaited()
+
+    async def test_only_empty_passages_skip_generation(self) -> None:
+        for reference in self.references:
+            reference["sourceData"]["chunk_text"] = ""
+        self.assertEqual(
+            await pipeline.answer_question("Question", "delegated-token"),
+            (pipeline.NO_ACCESSIBLE_EVIDENCE, []),
         )
         self.generate.assert_not_awaited()
 
@@ -236,9 +293,7 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
         stream.output_item_function_call.assert_not_called()
         stream.output_item_function_call_output.assert_not_called()
-        self.assertEqual(
-            stream.response["output"][0]["content"][0]["annotations"], []
-        )
+        self.assertEqual(stream.response["output"][0]["content"][0]["annotations"], [])
         self.generate.assert_not_awaited()
 
     async def test_only_declared_supporting_sources_are_attached(self) -> None:
@@ -316,7 +371,7 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 pipeline,
                 "generation_agent",
-                new=SimpleNamespace(run=Mock(return_value=model_stream(payload))),
+                new=SimpleNamespace(run=mock_streaming_generation(payload)),
             ),
             patch.object(responses_adapter, "ResponseEventStream", return_value=stream),
         ):
@@ -350,6 +405,35 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
             source_ids,
         )
 
+    async def test_streaming_uses_the_same_constrained_schema_as_nonstreaming(
+        self,
+    ) -> None:
+        await pipeline.answer_question("Question", "delegated-token")
+        expected = self.generate.await_args.kwargs["options"]["response_format"]
+        payload = '{"answer":"Answer","source_ids":["chunk-1"]}'
+        generate = mock_streaming_generation(payload)
+        with patch.object(
+            pipeline, "generation_agent", new=SimpleNamespace(run=generate)
+        ):
+            stream = pipeline.stream_answer("Question", self.references)
+            self.assertEqual("".join([delta async for delta in stream]), "Answer")
+            answer, selected = await stream.get_final_response()
+        self.assertEqual(answer, "Answer")
+        self.assertEqual(selected, [self.references[1]])
+        self.assertTrue(generate.call_args.kwargs["stream"])
+        actual = generate.call_args.kwargs["options"]["response_format"]
+        self.assertEqual(actual.model_json_schema(), expected.model_json_schema())
+
+    async def test_streaming_rejects_unsupplied_source_ids_during_parsing(self) -> None:
+        payload = '{"answer":"Answer","source_ids":["not-authorized"]}'
+        generate = mock_streaming_generation(payload)
+        with patch.object(
+            pipeline, "generation_agent", new=SimpleNamespace(run=generate)
+        ):
+            stream = pipeline.stream_answer("Question", self.references)
+            with self.assertRaises(ValidationError):
+                await stream.get_final_response()
+
     async def test_incomplete_stream_cannot_be_accepted_as_a_complete_answer(
         self,
     ) -> None:
@@ -357,11 +441,90 @@ class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             pipeline,
             "generation_agent",
-            new=SimpleNamespace(run=Mock(return_value=model_stream(payload))),
+            new=SimpleNamespace(run=mock_streaming_generation(payload)),
         ):
             response_stream = pipeline.stream_answer("Question", self.references)
             with self.assertRaises(ValueError):
                 await response_stream.get_final_response()
+
+
+class AnswerResponseFormatTests(unittest.TestCase):
+    def test_schema_and_json_parsing_preserve_the_exact_source_set(self) -> None:
+        for identifiers in (["one"], ["one", "two", "three"]):
+            with self.subTest(identifiers=identifiers):
+                references = [
+                    {"sourceData": {"chunk_id": identifier}}
+                    for identifier in identifiers
+                ]
+                response_format = pipeline.build_answer_response_format(references)
+                schema = response_format.model_json_schema()
+                self.assertEqual(list(schema["properties"]), ["answer", "source_ids"])
+                self.assertEqual(schema["required"], ["answer", "source_ids"])
+                self.assertFalse(schema["additionalProperties"])
+                self.assertEqual(schema["$defs"]["PolicySourceId"]["enum"], identifiers)
+                self.assertEqual(
+                    schema["properties"]["source_ids"]["items"],
+                    {"$ref": "#/$defs/PolicySourceId"},
+                )
+                self.assertEqual(
+                    schema["properties"]["source_ids"]["description"],
+                    pipeline.PolicyAnswer.model_fields["source_ids"].description,
+                )
+                for selection in (identifiers, [], [identifiers[0], identifiers[0]]):
+                    payload = {"answer": "Answer", "source_ids": selection}
+                    value = response_format.model_validate_json(json.dumps(payload))
+                    self.assertIsInstance(value, pipeline.PolicyAnswer)
+                    self.assertEqual(value.source_ids, selection)
+                    self.assertEqual(json.loads(value.model_dump_json()), payload)
+                for payload in (
+                    {"answer": "Answer", "source_ids": ["other"]},
+                    {"answer": "Answer", "source_ids": [1]},
+                    {"answer": "Answer", "source_ids": identifiers, "extra": True},
+                    {"answer": "Answer"},
+                ):
+                    with self.assertRaises(ValidationError):
+                        response_format.model_validate_json(json.dumps(payload))
+
+    def test_duplicates_do_not_expand_the_schema_or_citations(self) -> None:
+        first = {"sourceData": {"chunk_id": "one"}, "rerankerScore": 1}
+        better = {"sourceData": {"chunk_id": "one"}, "rerankerScore": 2}
+        response_format = pipeline.build_answer_response_format([first, better])
+        self.assertEqual(
+            response_format.model_json_schema()["$defs"]["PolicySourceId"]["enum"],
+            ["one"],
+        )
+        value = response_format.model_validate_json(
+            '{"answer":"Answer","source_ids":["one","one"]}'
+        )
+        self.assertEqual(
+            pipeline.select_answer_sources(value, [first, better]),
+            ("Answer", [better]),
+        )
+
+    def test_request_schemas_do_not_leak_source_ids(self) -> None:
+        formats = [
+            pipeline.build_answer_response_format(
+                [{"sourceData": {"chunk_id": identifier}}]
+            )
+            for identifier in ("one", "two")
+        ]
+        for response_format, allowed, rejected in (
+            (formats[0], "one", "two"),
+            (formats[1], "two", "one"),
+        ):
+            self.assertEqual(
+                response_format.model_json_schema()["$defs"]["PolicySourceId"]["enum"],
+                [allowed],
+            )
+            with self.assertRaises(ValidationError):
+                response_format.model_validate_json(
+                    json.dumps({"answer": "Answer", "source_ids": [rejected]})
+                )
+        self.assertNotIn("$defs", pipeline.PolicyAnswer.model_json_schema())
+
+    def test_empty_source_set_cannot_produce_an_unconstrained_schema(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one policy source"):
+            pipeline.build_answer_response_format([])
 
 
 class AnswerTextDecoderTests(unittest.TestCase):

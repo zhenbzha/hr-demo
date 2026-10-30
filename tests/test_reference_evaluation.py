@@ -205,6 +205,43 @@ class MaintainedReferenceTests(unittest.TestCase):
 
 
 class ReferenceReplayTests(unittest.TestCase):
+    def test_documented_replay_uses_the_configured_judge(self):
+        guide = (Path(__file__).resolve().parents[1] / "SHARING.md").read_text(
+            encoding="utf-8"
+        )
+        section = guide.split("### Saved-answer reference replay", 1)[1]
+        command = section.split("```powershell", 1)[1].split("```", 1)[0]
+        tokens = command.replace("`\n", " ").split()
+        self.assertEqual(tokens[1], r"scripts\run_foundry_evaluation.py")
+        for generation in (None, "generation"):
+            with (
+                self.subTest(generation=generation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                args, _ = reference_fixture(Path(temporary))
+                environment = {
+                    "FOUNDRY_PROJECT_ENDPOINT": args.project_endpoint,
+                    "ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME": args.model_deployment,
+                }
+                if generation is not None:
+                    environment["AZURE_AI_MODEL_DEPLOYMENT_NAME"] = generation
+                argv = [
+                    environment.get(token[5:]) if token.startswith("$env:") else token
+                    for token in tokens[2:]
+                ]
+                with (
+                    patch.dict(cli.os.environ, environment, clear=True),
+                    patch(
+                        "sys.argv",
+                        ["run_foundry_evaluation.py", *[arg for arg in argv if arg]],
+                    ),
+                ):
+                    parsed = cli.parse_args()
+                self.assertTrue(parsed.prepare_replay)
+                self.assertEqual(parsed.model_deployment, args.model_deployment)
+                args.model_deployment = parsed.model_deployment
+                self.assertEqual(len(load_fixture(args).rows), 3)
+
     def test_saved_answers_context_and_runtime_instructions_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

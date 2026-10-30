@@ -188,6 +188,7 @@ async def run_case(
     retrieval_evidence: list[dict[str, Any]] = []
     compact_evidence: list[dict[str, Any]] = []
     generation_input: str | None = None
+    generation_response_schema: dict[str, Any] | None = None
 
     if decision.status != "retrieve":
         answer = decision.message or ""
@@ -210,6 +211,9 @@ async def run_case(
                 local_regions=decision.regions,
                 compact_evidence=compact_evidence,
             )
+            generation_response_schema = pipeline.build_answer_response_format(
+                references
+            ).model_json_schema()
             generation_started = time.perf_counter()
             answer, references = await pipeline.generate_answer(
                 generation_input, references
@@ -253,6 +257,7 @@ async def run_case(
         "diagnostics": agent_result.diagnostics,
         "retrieval_evidence": retrieval_evidence,
         "generation_input": generation_input,
+        "generation_response_schema": generation_response_schema,
         "response_id_origin": "local_execution_not_hosted_response",
         "classifierSeconds": classifier_seconds,
         "searchSeconds": search_seconds,
@@ -447,7 +452,7 @@ async def main_async(args: argparse.Namespace) -> None:
             "source_hashes": source_hashes,
             "generation_model": os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
             "generation_reasoning_effort": pipeline.GENERATION_REASONING_EFFORT,
-            "generation_response_schema": pipeline.PolicyAnswer.model_json_schema(),
+            "generation_response_schema_template": pipeline.PolicyAnswer.model_json_schema(),
             "classification_model": os.environ[
                 "AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME"
             ],
