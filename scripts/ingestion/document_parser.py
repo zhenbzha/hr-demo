@@ -11,6 +11,7 @@ from azure.ai.documentintelligence.models import (
     AnalyzeResult,
     DocumentContentFormat,
     DocumentPage,
+    DocumentSpan,
     DocumentTable,
 )
 
@@ -25,7 +26,22 @@ type _SectionSpan = tuple[int, int, tuple[str, ...]]
 
 
 def _section_spans(result: AnalyzeResult) -> list[_SectionSpan]:
-    """Map section spans to their inherited document and section headings."""
+    """
+    Map section spans to their inherited document and section headings.
+
+    Parameters
+    ----------
+    result : AnalyzeResult
+        Layout result containing section references and paragraph roles.
+
+    Returns
+    -------
+    list of tuple
+        Start offset, exclusive end offset, and heading path for each section
+        span. Offsets count Unicode code points in ``result.content``. Paths
+        contain ancestor headings followed by titles and section headings
+        from the current section, in their reported order.
+    """
     sections = getattr(result, "sections", None) or []
     paragraphs = getattr(result, "paragraphs", None) or []
     children = {
@@ -60,6 +76,13 @@ def _section_spans(result: AnalyzeResult) -> list[_SectionSpan]:
 
 
 def _heading_at(spans: list[_SectionSpan], offset: int) -> str | None:
+    """
+    Return the deepest heading path among sections covering the offset.
+
+    Depth is the number of inherited headings; the first path wins ties.
+    Return None when section metadata is absent, or an empty string when
+    spans exist but no matching headings apply.
+    """
     if not spans:
         return None
     paths = (path for start, end, path in spans if start <= offset < end)
@@ -73,7 +96,7 @@ def _text_blocks(
     page_num: int,
     sections: list[_SectionSpan],
 ) -> list[ContentBlock]:
-    """Split a text span at DI section boundaries without changing its text."""
+    """Split text at the section boundaries reported by Document Intelligence."""
     boundaries = {start, end}
     for section_start, section_end, _ in sections:
         boundaries.update(
@@ -100,7 +123,8 @@ def _native_table_markup(content: str, table: DocumentTable) -> str:
 
 
 def _column_header_rows(table: DocumentTable) -> int:
-    """Count consecutive header-only rows at the start of a table.
+    """
+    Count consecutive header-only rows at the start of a table.
 
     Treat columnHeader and stubHead cells as headers. Stop at the first
     row that contains a body cell or has no header cells.
@@ -117,10 +141,21 @@ def _column_header_rows(table: DocumentTable) -> int:
 
 
 def extract_page_lines(page: DocumentPage) -> list[TextLine]:
-    """Return OCR lines with page-coordinate polygons and text spans.
+    """
+    Extract text lines and their positions from an analyzed PDF page.
 
-    Polygon coordinates use the page's reported unit. Span offsets refer
-    to the Document Intelligence analysis content.
+    Parameters
+    ----------
+    page : DocumentPage
+        Page from a Document Intelligence layout result using
+        Unicode-code-point offsets.
+
+    Returns
+    -------
+    list of TextLine
+        Text lines with their page coordinates and character offsets.
+        Coordinates use the page's reported unit. Offsets refer to
+        the complete analysis text.
     """
     extracted = []
     for line in page.lines or []:
@@ -143,10 +178,48 @@ def extract_page_lines(page: DocumentPage) -> list[TextLine]:
     return extracted
 
 
+def _spans_overlap(first: DocumentSpan, second: DocumentSpan) -> bool:
+    """Test strict span overlap; touching end and start offsets do not overlap."""
+    return (
+        first.offset < second.offset + second.length
+        and first.offset + first.length > second.offset
+    )
+
+
+def _table_intersections(
+    page_span: DocumentSpan, tables: list[DocumentTable]
+) -> list[tuple[int, int, int]]:
+    """
+    Clip table spans to a page span and order them by source position.
+
+    Parameters
+    ----------
+    page_span : DocumentSpan
+        Page interval with Unicode-code-point offsets in the analysis text.
+    tables : list of DocumentTable
+        Tables in their original analysis-result order.
+
+    Returns
+    -------
+    list of tuple of int
+        Intersections as start offset, exclusive end offset, and table index.
+        Each table span contributes separately; tuples are sorted by start,
+        then end, then table index.
+    """
+    start, end = page_span.offset, page_span.offset + page_span.length
+    return sorted(
+        (max(start, span.offset), min(end, span.offset + span.length), index)
+        for index, table in enumerate(tables)
+        for span in table.spans
+        if _spans_overlap(span, page_span)
+    )
+
+
 def _table_blocks(
     result: AnalyzeResult, sections: list[_SectionSpan]
 ) -> dict[int, ContentBlock]:
-    """Return table blocks keyed by their index in the analysis result.
+    """
+    Return table blocks keyed by their index in the analysis result.
 
     Record all source pages with zero-based numbering.
     """
@@ -158,8 +231,7 @@ def _table_blocks(
                     page.page_number - 1
                     for page in result.pages
                     if any(
-                        span.offset < page_span.offset + page_span.length
-                        and span.offset + span.length > page_span.offset
+                        _spans_overlap(span, page_span)
                         for span in table.spans
                         for page_span in page.spans
                     )
@@ -183,21 +255,18 @@ def _page_blocks(
     inserted_tables: set[int],
     sections: list[_SectionSpan],
 ) -> list[ContentBlock]:
-    """Build a page's text and table blocks in reading order.
+    """
+    Build a page's text and table blocks in reading order.
 
     Add each table once across all pages and update inserted_tables.
     """
     blocks = []
     for page_span in sorted(page.spans, key=lambda span: span.offset):
         start, end = page_span.offset, page_span.offset + page_span.length
-        intersections = sorted(
-            (max(start, span.offset), min(end, span.offset + span.length), index)
-            for index, table in enumerate(result.tables or [])
-            for span in table.spans
-            if span.offset < end and span.offset + span.length > start
-        )
         cursor = start
-        for table_start, table_end, table_index in intersections:
+        for table_start, table_end, table_index in _table_intersections(
+            page_span, result.tables or []
+        ):
             if table_start > cursor:
                 blocks.extend(
                     _text_blocks(
@@ -222,10 +291,21 @@ def _page_blocks(
 
 
 def parse_layout_result(result: AnalyzeResult) -> list[Page]:
-    """Return pages containing text, tables, and citation coordinates.
+    """
+    Return pages containing text, tables, and citation coordinates.
 
-    Page numbers are zero-based. Each multi-page table appears once, with
-    all contributing page numbers recorded on its block.
+    Parameters
+    ----------
+    result : AnalyzeResult
+        Completed ``prebuilt-layout`` analysis with Markdown content,
+        native HTML tables, and Unicode-code-point spans.
+
+    Returns
+    -------
+    list of Page
+        All extracted pages in reading order, numbered from zero, with
+        section headings and text coordinates. A table spanning several
+        pages appears once and records every page it came from.
     """
     pages = []
     offset = 0
@@ -258,10 +338,28 @@ def analyze_local_pdf(
     path: Path,
     timeout: float = 600,
 ) -> list[Page]:
-    """Analyze a local PDF and return its parsed layout pages.
+    """
+    Analyze a local PDF and return its parsed layout pages.
 
-    Request Markdown with Unicode-code-point offsets. Raise TimeoutError
-    if analysis remains incomplete after waiting timeout seconds.
+    Parameters
+    ----------
+    client : DocumentIntelligenceClient
+        Authenticated Document Intelligence client.
+    path : pathlib.Path
+        PDF file to send to the ``prebuilt-layout`` model.
+    timeout : float, default=600
+        Maximum seconds to wait for the analysis job to complete.
+
+    Returns
+    -------
+    list of Page
+        Pages containing extracted text, tables, page dimensions,
+        and text positions.
+
+    Raises
+    ------
+    TimeoutError
+        Analysis is still incomplete after the poller wait.
     """
     poller = client.begin_analyze_document(
         model_id=MODEL_ID,

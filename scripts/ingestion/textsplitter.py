@@ -27,6 +27,21 @@ def token_count(text: str) -> int:
 
 
 def _combine(chunks: list[Chunk]) -> Chunk:
+    """
+    Join passage fragments and retain their distinct source context.
+
+    Parameters
+    ----------
+    chunks : list of Chunk
+        Fragments in reading order. Their text already contains separators.
+
+    Returns
+    -------
+    Chunk
+        Concatenated text with sorted, unique page numbers. Nonempty headings
+        are deduplicated in encounter order and joined with ``; `` because
+        one packed passage can contain more than one section.
+    """
     return Chunk(
         text="".join(chunk.text for chunk in chunks),
         page_numbers=tuple(
@@ -66,12 +81,53 @@ def _connected_rows(rows: list[str]) -> Iterator[list[str]]:
         start = end
 
 
+def _split_table_headers(
+    rows: list[str], header_count: int | None
+) -> tuple[list[str], list[str]] | None:
+    """
+    Separate repeatable table headers from body rows when safe.
+
+    Parameters
+    ----------
+    rows : list of str
+        Table rows in source order, including their HTML markup.
+    header_count : int or None
+        Header-row count from layout metadata. Only None triggers HTML
+        inference: consecutive leading rows must contain ``th`` cells,
+        without ``td`` cells or row-scoped headers.
+
+    Returns
+    -------
+    tuple of (list of str, list of str) or None
+        Header and body rows, or None when no body remains or a header's
+        rowspan crosses into the body. Such tables must stay intact.
+    """
+    if header_count is None:
+        header_count = 0
+        for row in rows:
+            if not re.search(r"<th\b", row, re.IGNORECASE) or re.search(
+                r"<td\b|scope=[\"']row[\"']", row, re.IGNORECASE
+            ):
+                break
+            header_count += 1
+    header_rows, rows = rows[:header_count], rows[header_count:]
+    header_crosses_body = any(
+        index + int(span) > len(header_rows)
+        for index, row in enumerate(header_rows)
+        for span in ROWSPAN_PATTERN.findall(row)
+    )
+    if not rows or header_crosses_body:
+        return None
+    return header_rows, rows
+
+
 class SentenceTextSplitter:
-    """Split page content into passages while retaining source page numbers.
+    """
+    Split page content into passages while retaining source page numbers.
 
     Keep small tables intact. Split larger tables between row groups and
-    repeat their column headers. A row group may exceed the target budget,
-    but exceeding the embedding model's hard limit raises ValueError.
+    repeat their column headers. A row group may exceed the target size,
+    but exceeding the embedding model's input limit raises ValueError.
     """
 
     def __init__(
@@ -80,10 +136,19 @@ class SentenceTextSplitter:
         *,
         measure_input: Callable[[str, str], int] | None = None,
     ) -> None:
-        """Set the token budget and optional embedding-input counter.
+        """
+        Set the target passage size and the function used to measure it.
 
-        If supplied, measure_input(text, heading) must return the token
-        count of the final embedding input, including added metadata.
+        Parameters
+        ----------
+        max_tokens_per_section : int, default=500
+            Target tokens per passage, between 1 and the embedding model's
+            input limit. Sets the text-overlap target between passages in
+            the same section to 10% of this value.
+        measure_input : callable or None, default=None
+            Function accepting ``text`` and ``heading`` and returning the
+            token count of the full embedding input, including added titles
+            and headings. By default, counts tokens in the passage text.
         """
         if not 1 <= max_tokens_per_section <= EMBEDDING_TOKEN_LIMIT:
             raise ValueError(
@@ -131,29 +196,43 @@ class SentenceTextSplitter:
                 yield Chunk(fragment, block.page_numbers, heading)
 
     def _table_chunks(self, block: ContentBlock, heading: str) -> Iterator[Chunk]:
+        """
+        Keep small tables intact and pack larger tables by connected rows.
+
+        Repeat safely separable headers and preserve the surrounding table
+        markup, including captions, in every split. Rows linked by rowspan
+        cells stay together; headers spanning body rows keep the table whole.
+
+        Parameters
+        ----------
+        block : ContentBlock
+            Native table HTML, source pages, and optional header-row count.
+        heading : str
+            Section context included when measuring the embedding input.
+
+        Yields
+        ------
+        Chunk
+            Table passage with its source pages and heading. An indivisible
+            row group or table may exceed the target passage size, but not
+            the embedding model's input limit.
+
+        Raises
+        ------
+        ValueError
+            An oversized table has no row boundaries, or an indivisible
+            table or row group exceeds the embedding input limit.
+        """
         if self._fits(block.text, heading):
             yield Chunk(block.text, block.page_numbers, heading)
             return
         row_matches = list(ROW_PATTERN.finditer(block.text))
         if not row_matches:
             raise ValueError("Oversized table has no row boundaries")
-        rows = [match[0] for match in row_matches]
-        header_count = block.table_header_rows
-        if header_count is None:
-            header_count = 0
-            for row in rows:
-                if not re.search(r"<th\b", row, re.IGNORECASE) or re.search(
-                    r"<td\b|scope=[\"']row[\"']", row, re.IGNORECASE
-                ):
-                    break
-                header_count += 1
-        header_rows, rows = rows[:header_count], rows[header_count:]
-        header_crosses_body = any(
-            index + int(span) > len(header_rows)
-            for index, row in enumerate(header_rows)
-            for span in ROWSPAN_PATTERN.findall(row)
+        row_sections = _split_table_headers(
+            [match[0] for match in row_matches], block.table_header_rows
         )
-        if not rows or header_crosses_body:
+        if row_sections is None:
             if not self._fits(block.text, heading, EMBEDDING_TOKEN_LIMIT):
                 raise ValueError(
                     "Table headers cannot be split safely within the embedding limit; "
@@ -161,6 +240,7 @@ class SentenceTextSplitter:
                 )
             yield Chunk(block.text, block.page_numbers, heading)
             return
+        header_rows, rows = row_sections
         # Remove section wrappers so row-group splits cannot leave unmatched tags.
         opening = TABLE_SECTION_PATTERN.sub("", block.text[: row_matches[0].start()])
         closing = TABLE_SECTION_PATTERN.sub("", block.text[row_matches[-1].end() :])
@@ -184,6 +264,24 @@ class SentenceTextSplitter:
             yield Chunk(render(pending), block.page_numbers, heading)
 
     def _passages(self, pages: list[Page]) -> Iterator[tuple[Chunk, bool]]:
+        """
+        Yield text and table fragments with their current section context.
+
+        Carry headings across page boundaries. Explicit block headings,
+        including an empty heading, override that context; infer Markdown
+        headings only when block heading metadata is absent.
+
+        Parameters
+        ----------
+        pages : list of Page
+            Parsed pages in reading order, with layout blocks when available.
+
+        Yields
+        ------
+        tuple of (Chunk, bool)
+            Fragment and a flag identifying table content. The caller uses
+            this flag to keep tables out of repeated text overlap.
+        """
         heading = ""
         for page_index, page in enumerate(pages):
             for block in _layout_blocks(page):
@@ -208,6 +306,27 @@ class SentenceTextSplitter:
                         yield chunk, False
 
     def _overlap(self, previous: list[Chunk], following: Chunk) -> list[Chunk]:
+        """
+        Select whole trailing fragments matching the next fragment's heading.
+
+        Stop at the first heading change or budget failure; do not trim
+        fragments to fill the overlap allowance. The overlap allowance counts
+        text alone, while the combined overlap and following fragment must
+        fit the target size with their full embedding context.
+
+        Parameters
+        ----------
+        previous : list of Chunk
+            Candidate trailing text fragments after the most recent table,
+            in reading order.
+        following : Chunk
+            Next fragment, whose heading must match every repeated fragment.
+
+        Returns
+        -------
+        list of Chunk
+            Selected suffix of previous fragments, still in reading order.
+        """
         selected: list[Chunk] = []
         for chunk in reversed(previous):
             if chunk.heading != following.heading:
@@ -227,11 +346,30 @@ class SentenceTextSplitter:
         return selected
 
     def split_pages(self, pages: list[Page]) -> Iterator[Chunk]:
-        """Pack adjacent text and tables within the enriched token budget.
+        """
+        Group text and tables into passages that fit the token limit.
 
-        Keep each section's heading in the chunk metadata. On a size
-        boundary, overlap only trailing text from the same section;
-        do not duplicate tables.
+        Retain section headings and source page numbers. Overlap between
+        passages repeats trailing text from the same section.
+
+        Parameters
+        ----------
+        pages : list of Page
+            Analyzed pages from one PDF in reading order. Use their text
+            and table blocks when available, otherwise parse their
+            Markdown and HTML text.
+
+        Yields
+        ------
+        Chunk
+            Passage text, section heading, and source page numbers
+            starting at zero.
+
+        Raises
+        ------
+        ValueError
+            Added titles or headings leave no room for passage text,
+            or a table cannot fit within the embedding model's input limit.
         """
         pending: list[Chunk] = []
         overlap_start = 0

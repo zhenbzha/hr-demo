@@ -306,6 +306,45 @@ class ReferenceReplayTests(unittest.TestCase):
                 "good:clarify",
             )
 
+    def test_text_only_historical_capture_does_not_invent_tool_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args, manifest = reference_fixture(root)
+            old_rubric = hashlib.sha256(b"Previous reviewed HR rubric").hexdigest()
+            for capture in manifest["captures"]:
+                path = root / capture["path"]
+                report = json.loads(path.read_text())
+                report["rubric_sha256"] = old_rubric
+                for row in report["results"]:
+                    row.pop("output_items")
+                capture["sha256"] = write_json(path, report)
+            write_json(args.replay_cases, manifest)
+            result = load_fixture(args)
+            self.assertEqual(result.provenance["rubric_sha256"], old_rubric)
+            for row in result.rows:
+                self.assertEqual(
+                    row["output_items"],
+                    [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": row["response"]}],
+                        }
+                    ],
+                )
+
+    def test_replay_rejects_captures_with_different_rubrics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args, manifest = reference_fixture(root)
+            capture = manifest["captures"][0]
+            path = root / capture["path"]
+            report = json.loads(path.read_text())
+            report["rubric_sha256"] = hashlib.sha256(b"Different rubric").hexdigest()
+            capture["sha256"] = write_json(path, report)
+            write_json(args.replay_cases, manifest)
+            with self.assertRaisesRegex(ValueError, "rubric hashes differ"):
+                load_fixture(args)
+
     def test_unreviewed_labels_cannot_be_scored(self):
         with tempfile.TemporaryDirectory() as temporary:
             args, manifest = reference_fixture(Path(temporary))
@@ -503,6 +542,17 @@ class ReferenceFoundryContractTests(unittest.TestCase):
         self.assertEqual(
             criteria["relevance"]["data_mapping"]["query"], "{{item.agent_query}}"
         )
+        for name in ("relevance", "groundedness", "intent_resolution"):
+            self.assertEqual(
+                criteria[name]["data_mapping"]["response"], "{{item.output_items}}"
+            )
+        self.assertEqual(
+            criteria["coherence"]["data_mapping"]["response"], "{{item.response}}"
+        )
+        self.assertEqual(
+            foundry.task_adherence_criterion("judge")["data_mapping"]["response"],
+            "{{item.output_items}}",
+        )
 
     def test_captured_context_does_not_require_or_fabricate_ground_truth(self):
         schema = foundry.dataset_schema(agent_inputs=True)["item_schema"]
@@ -593,9 +643,12 @@ class ReferenceFoundryContractTests(unittest.TestCase):
             project.evaluators.get_version.return_value = SimpleNamespace(
                 name="ask_hr_expected_behavior",
                 version="9",
-                definition={"prompt_text": foundry.BEHAVIOR_PROMPT},
+                definition={"prompt_text": "Previously captured rubric."},
             )
             summary = {
+                "rubric_sha256": hashlib.sha256(
+                    b"Previously captured rubric."
+                ).hexdigest(),
                 "dataset_version": "replay",
                 "agent": {"name": "ask-hr", "version": "captured"},
                 "behavior_evaluator": {
@@ -626,6 +679,23 @@ class ReferenceFoundryContractTests(unittest.TestCase):
             project.evaluators.get_version.assert_called_once_with(
                 name="ask_hr_expected_behavior", version="9"
             )
+            summary["rubric_sha256"] = hashlib.sha256(b"Changed rubric.").hexdigest()
+            with (
+                patch.object(runner, "AIProjectClient", return_value=project),
+                patch.object(runner, "run_stage") as stage,
+                self.assertRaisesRegex(ValueError, "recorded rubric"),
+            ):
+                runner.score_reference_rows(
+                    project_endpoint=args.project_endpoint,
+                    evaluation_name="Replay",
+                    settings=foundry.EvaluationSettings("judge", 4, 1, 60),
+                    credential=Mock(),
+                    rows=dataset.rows,
+                    generation_case_ids=dataset.generation_case_ids,
+                    summary=summary,
+                    summary_path=root / "result.json",
+                )
+            stage.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -107,7 +107,33 @@ def index_schema(
     embedding_deployment: str,
     dimensions: int,
 ) -> dict[str, Any]:
-    """Build the schema with matching index and query vector settings."""
+    """
+    Build a Search index definition without contacting Azure.
+
+    Parameters
+    ----------
+    index_name : str
+        Name of the Search index.
+    openai_endpoint : str
+        Azure OpenAI HTTPS endpoint used to embed search queries.
+    embedding_deployment : str
+        Deployment serving ``text-embedding-3-large``;
+        must match the deployment used by ``embed_documents``.
+    dimensions : int
+        Number of values in each document and query embedding,
+        from 1 to 3,072.
+
+    Returns
+    -------
+    dict
+        Index configuration for text, citations, vector search, query
+        embeddings, and semantic ranking.
+
+    Notes
+    -----
+    The Search service's managed identity needs access to the embedding
+    deployment to generate query embeddings.
+    """
     validate_dimensions(dimensions)
     return {
         "name": index_name,

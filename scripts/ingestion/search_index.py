@@ -1,34 +1,25 @@
-"""Embed, synchronize, and verify a dedicated Azure AI Search index."""
+"""Embed chunks and update Azure AI Search one source PDF at a time."""
 
 from __future__ import annotations
 
 import json
-import logging
 import math
 import time
+from collections.abc import Callable
 from functools import partial
 from itertools import batched
 from typing import Any
 
-from azure.core.credentials import TokenCredential
 from azure.core.exceptions import ResourceNotFoundError
 from azure.core.pipeline import PipelineResponse
 from azure.core.rest import HttpRequest, HttpResponse
-from azure.identity import get_bearer_token_provider
 from azure.search.documents import SearchClient, SearchIndexingBufferedSender
 from azure.search.documents.indexes import SearchIndexClient
-from azure.search.documents.models import VectorizableTextQuery
 from openai import AzureOpenAI
 
-from .azure_http import (
-    OPENAI_API_VERSION,
-    OPENAI_SCOPE,
-    SEARCH_API_VERSION,
-)
 from .search_schema import EMBEDDING_MODEL, validate_dimensions
 from .textsplitter import EMBEDDING_TOKEN_LIMIT, token_count
 
-logger = logging.getLogger(__name__)
 INDEX_BATCH_SIZE = 100
 
 
@@ -75,16 +66,30 @@ def _embedding_vectors(
 
 def embed_documents(
     *,
+    client: AzureOpenAI,
     documents: list[dict[str, Any]],
-    endpoint: str,
     deployment: str,
     dimensions: int,
-    credential: TokenCredential,
 ) -> None:
-    """Generate embeddings and add chunk_vector to each document in place.
+    """
+    Add an embedding vector to each search record.
 
-    Embed semantic_text after checking input token limits. Validate the
-    returned model, vector dimensions, and input-to-vector correspondence.
+    Read each record's ``semantic_text`` and store its embedding in
+    ``chunk_vector``. Validate the model, vector length, and one result
+    per input.
+
+    Parameters
+    ----------
+    client : AzureOpenAI
+        Azure OpenAI client used to generate embeddings.
+        The caller is responsible for closing it.
+    documents : list of dict
+        Records to update. Each must contain nonempty ``semantic_text``
+        that fits the embedding model's token limit.
+    deployment : str
+        Deployment name serving ``text-embedding-3-large``.
+    dimensions : int
+        Requested vector length; must match the Search schema.
     """
     validate_dimensions(dimensions)
     for document in documents:
@@ -93,117 +98,124 @@ def embed_documents(
             raise ValueError("Every embedding input must contain semantic_text")
         if token_count(text) > EMBEDDING_TOKEN_LIMIT:
             raise ValueError(f"Embedding input exceeds {EMBEDDING_TOKEN_LIMIT} tokens")
-    with AzureOpenAI(
-        azure_endpoint=endpoint,
-        api_version=OPENAI_API_VERSION,
-        azure_ad_token_provider=get_bearer_token_provider(credential, OPENAI_SCOPE),
-        timeout=180,
-        max_retries=3,
-    ) as client:
-        for start in range(0, len(documents), 16):
-            batch = documents[start : start + 16]
-            result = client.embeddings.create(
-                model=deployment,
-                input=[document["semantic_text"] for document in batch],
-                dimensions=dimensions,
-                encoding_format="float",
-            )
-            vectors = _embedding_vectors(result.model_dump(), len(batch), dimensions)
-            for document, vector in zip(batch, vectors, strict=True):
-                document["chunk_vector"] = vector
-            print(f"Embedded {start + len(batch)}/{len(documents)} chunks")
-
-
-def _check_embedding_compatibility(
-    existing: dict[str, Any], proposed: dict[str, Any]
-) -> None:
-    previous_fields = {field["name"]: field for field in existing["fields"]}
-    previous_vector = previous_fields.get("chunk_vector", {})
-    next_vector = next(
-        field for field in proposed["fields"] if field["name"] == "chunk_vector"
-    )
-    if previous_vector.get("dimensions") != next_vector["dimensions"]:
-        raise ValueError(
-            "Changing vector dimensions requires a new index, not an in-place update"
+    for start in range(0, len(documents), 16):
+        batch = documents[start : start + 16]
+        result = client.embeddings.create(
+            model=deployment,
+            input=[document["semantic_text"] for document in batch],
+            dimensions=dimensions,
+            encoding_format="float",
         )
-    before = existing.get("vectorSearch", {}).get("vectorizers", [])
-    after = proposed["vectorSearch"]["vectorizers"]
-    if len(before) != 1 or any(
-        str(before[0].get("azureOpenAIParameters", {}).get(field, "")).rstrip("/")
-        != str(after[0]["azureOpenAIParameters"][field]).rstrip("/")
-        for field in ("resourceUri", "deploymentId", "modelName")
-    ):
-        raise ValueError("Changing the query embedding deployment requires a new index")
+        vectors = _embedding_vectors(result.model_dump(), len(batch), dimensions)
+        for document, vector in zip(batch, vectors, strict=True):
+            document["chunk_vector"] = vector
+        print(f"Embedded {start + len(batch)}/{len(documents)} chunks")
 
 
-def _compatible_schema(
-    existing: dict[str, Any], proposed: dict[str, Any]
-) -> dict[str, Any]:
-    """Merge schema additions and settings while preserving existing fields.
-
-    Reject incompatible field types, key capabilities, or embedding
-    configuration with ValueError.
+def _immutable_field_settings(field: dict[str, Any]) -> dict[str, Any]:
     """
-    _check_embedding_compatibility(existing, proposed)
-    existing_fields = {field["name"]: field for field in existing["fields"]}
-    key = existing_fields.get("chunk_id", {})
-    if (
-        not key.get("key")
-        or not key.get("sortable", True)
-        or not key.get("filterable", True)
-    ):
-        raise ValueError(
-            "The existing chunk_id must be a sortable, filterable key; use a new index"
-        )
-    for field in proposed["fields"]:
-        previous = existing_fields.get(field["name"])
-        if previous is not None and previous["type"] != field["type"]:
-            raise ValueError(
-                f"Changing {field['name']} field type requires a new index"
-            )
-    logger.info(
-        "Preserving existing immutable Search fields; applying additions and mutable settings"
-    )
-    return {
-        **existing,
-        **proposed,
-        "fields": [
-            *existing["fields"],
-            *(
-                field
-                for field in proposed["fields"]
-                if field["name"] not in existing_fields
-            ),
-        ],
+    Normalize immutable settings for this index's scalar and vector fields.
+
+    Azure supplies defaults for omitted flags. Compare their effective values
+    rather than treating an explicit service default as a schema change.
+    ``retrievable`` and ``searchAnalyzer`` are mutable and are not compared.
+
+    Parameters
+    ----------
+    field : dict
+        One field from the existing or proposed flat index definition.
+
+    Returns
+    -------
+    dict
+        Immutable properties with Azure's omitted-value defaults applied.
+    """
+    field_type = field["type"]
+    vector = field.get("dimensions") is not None
+    defaults = {
+        "key": False,
+        "searchable": field_type in {"Edm.String", "Collection(Edm.String)"},
+        "filterable": not vector,
+        "sortable": not field_type.startswith("Collection(") and field_type != "Edm.GeographyPoint",
+        "facetable": not vector and field_type != "Edm.GeographyPoint",
+        "stored": True,
     }
+    return {
+        name: field[name] if field.get(name) is not None else defaults.get(name)
+        for name in (
+            "type", "key", "searchable", "filterable", "sortable", "facetable",
+            "stored", "analyzer", "indexAnalyzer", "normalizer", "dimensions",
+            "vectorSearchProfile", "vectorEncoding",
+        )
+    }
+
+
+def plan_index_update(
+    *,
+    client: SearchIndexClient,
+    schema: dict[str, Any],
+    recreate: bool,
+) -> str:
+    """
+    Read the index and choose its update action without changing Azure.
+
+    Parameters
+    ----------
+    client : SearchIndexClient
+        Caller-owned Search administration client.
+    schema : dict
+        Desired definition returned by ``index_schema``.
+    recreate : bool
+        Explicitly request a rebuild even if an in-place update is possible.
+
+    Returns
+    -------
+    {'create', 'rebuild', 'backfill', 'update'}
+        Missing indexes are created. Removed fields or changed immutable
+        properties require a rebuild. New fields require an in-place update
+        and document backfill. Mutable settings need only an in-place update.
+        Authentication, transport, and other service failures propagate.
+    """
+    try:
+        existing = client.get_index(schema["name"]).as_dict()
+    except ResourceNotFoundError:
+        return "create"
+    previous = {field["name"]: field for field in existing["fields"]}
+    proposed = {field["name"]: field for field in schema["fields"]}
+    if recreate or previous.keys() - proposed.keys():
+        return "rebuild"
+    if any(
+        _immutable_field_settings(previous[name]) != _immutable_field_settings(proposed[name])
+        for name in previous.keys() & proposed.keys()
+    ):
+        return "rebuild"
+    return "backfill" if proposed.keys() - previous.keys() else "update"
 
 
 def create_index(
     *,
-    endpoint: str,
-    index_name: str,
+    client: SearchIndexClient,
     schema: dict[str, Any],
-    recreate: bool,
-    credential: TokenCredential,
+    action: str,
 ) -> None:
-    """Create an index or apply compatible schema updates.
-
-    If recreate is True, delete the existing index before creating it.
-    Otherwise, raise ValueError for incompatible schema changes.
     """
-    with SearchIndexClient(
-        endpoint, credential, api_version=SEARCH_API_VERSION
-    ) as client:
-        try:
-            existing = client.get_index(index_name).as_dict()
-        except ResourceNotFoundError:
-            existing = None
-        if existing is not None:
-            if recreate:
-                client.delete_index(index_name)
-            else:
-                schema = _compatible_schema(existing, schema)
-        client.create_or_update_index(schema)
+    Apply a previously planned index update.
+
+    Parameters
+    ----------
+    client : SearchIndexClient
+        Caller-owned Search administration client.
+    schema : dict
+        Complete desired index definition; existing fields are not merged.
+    action : {'create', 'rebuild', 'backfill', 'update'}
+        Result from ``plan_index_update``. Only ``rebuild`` deletes the index.
+        The caller must save unfinished PDF IDs before applying this action.
+    """
+    if action not in {"create", "rebuild", "backfill", "update"}:
+        raise ValueError(f"Unknown index update action: {action}")
+    if action == "rebuild":
+        client.delete_index(schema["name"])
+    client.create_or_update_index(schema)
 
 
 def _acknowledgements(result: object, expected_keys: set[str]) -> list[dict[str, Any]]:
@@ -237,7 +249,8 @@ def _record_batch_response(
     contract_errors: list[str],
     failure_details: dict[str, Any],
 ) -> None:
-    """Record acknowledgement errors and failed-item response details.
+    """
+    Record acknowledgement errors and failed-item response details.
 
     Update the supplied contract_errors and failure_details collections
     for the caller's batch checks.
@@ -258,15 +271,16 @@ def _record_batch_response(
 
 
 def _write_actions(
-    endpoint: str,
-    index_name: str,
+    sender_factory: Callable[..., SearchIndexingBufferedSender],
     actions: list[dict[str, Any]],
-    credential: TokenCredential,
 ) -> None:
-    """Submit batched uploads or deletions and verify each acknowledgement.
+    """
+    Submit batched uploads or deletions and verify each acknowledgement.
 
     Require unique chunk IDs and a single operation type per call.
     Raise RuntimeError for failed or missing indexing acknowledgements.
+    The configured constructor creates a fresh sender for this operation's
+    callbacks; this function closes that sender before returning.
     """
     keys = [action["chunk_id"] for action in actions]
     if len(set(keys)) != len(keys):
@@ -285,11 +299,7 @@ def _write_actions(
     contract_errors: list[str] = []
     failure_details: dict[str, Any] = {}
 
-    with SearchIndexingBufferedSender(
-        endpoint,
-        index_name,
-        credential,
-        api_version=SEARCH_API_VERSION,
+    with sender_factory(
         auto_flush=False,
         max_retries_per_action=3,
         on_progress=lambda action: completed.add(action["chunk_id"]),
@@ -318,185 +328,139 @@ def _write_actions(
 
 def upload_documents(
     *,
-    endpoint: str,
-    index_name: str,
+    sender_factory: Callable[..., SearchIndexingBufferedSender],
     documents: list[dict[str, Any]],
-    credential: TokenCredential,
 ) -> None:
-    """Create or replace each Search document and verify its indexing result."""
+    """
+    Create or replace each Search document and verify its indexing result.
+
+    Use ``synchronize_document`` to also remove obsolete records for a PDF.
+    Successful SDK acknowledgements do not guarantee immediate query visibility.
+
+    Parameters
+    ----------
+    sender_factory : callable
+        Function that creates a buffered Search writer for the target index.
+        This function supplies the callbacks and closes the writer.
+    documents : list of dict
+        Chunk dictionaries with unique ``chunk_id`` values and
+        fields matching the index, including generated embeddings.
+
+    Raises
+    ------
+    RuntimeError
+        Search reports failed or missing document acknowledgements.
+    """
     _write_actions(
-        endpoint,
-        index_name,
+        sender_factory,
         [{**document, "@search.action": "upload"} for document in documents],
-        credential,
     )
 
 
-def _index_rows(
-    endpoint: str,
-    index_name: str,
-    credential: TokenCredential,
-    timeout: float = 120,
-) -> list[dict[str, Any]]:
-    """Return indexed chunk IDs, document IDs, and regions in key order.
-
-    Use keyset pagination to read every page. Raise TimeoutError if
-    enumeration exceeds timeout seconds.
-    """
-    rows: list[dict[str, Any]] = []
-    last_key = ""
-    deadline = time.monotonic() + timeout
-    with SearchClient(
-        endpoint, index_name, credential, api_version=SEARCH_API_VERSION
-    ) as client:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Search key enumeration timed out")
-            page = list(
-                client.search(
-                    search_text="*",
-                    select=["chunk_id", "document_id", "region"],
-                    order_by=["chunk_id asc"],
-                    top=1000,
-                    filter="chunk_id gt '" + last_key.replace("'", "''") + "'"
-                    if last_key
-                    else None,
-                    timeout=remaining,
-                    read_timeout=min(30, remaining),
-                    connection_timeout=min(30, remaining),
-                )
-            )
-            if not page:
-                return rows
-            keys = [item.get("chunk_id") for item in page]
-            if any(
-                not isinstance(key, str) or key <= last_key for key in keys
-            ) or keys != sorted(set(keys)):
-                raise RuntimeError(
-                    "Search key enumeration did not advance in unique key order"
-                )
-            rows.extend(page)
-            last_key = keys[-1]
-
-
-def _wait_for_keys(
-    endpoint: str,
-    index_name: str,
-    expected: set[str],
-    credential: TokenCredential,
-    *,
-    exact: bool,
+def _document_chunk_ids(
+    client: SearchClient,
+    document_id: str,
     timeout: float = 120,
 ) -> set[str]:
+    """
+    Read existing chunk IDs for one PDF, not the entire index.
+
+    Use the filterable document ID and keyset pagination. Return only keys;
+    no chunk text or vectors are retrieved. Raise TimeoutError if enumeration
+    exceeds timeout seconds.
+    """
+    chunk_ids: set[str] = set()
+    document_filter = "document_id eq '" + document_id.replace("'", "''") + "'"
+    last_key = ""
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError(
-                "Search did not expose the expected chunk keys before the visibility deadline"
-            )
-        actual = {
-            item["chunk_id"]
-            for item in _index_rows(endpoint, index_name, credential, remaining)
-        }
-        matches = actual == expected if exact else expected.issubset(actual)
-        if matches:
-            return actual
-        time.sleep(min(1, max(0, deadline - time.monotonic())))
-
-
-def synchronize_documents(
-    *,
-    endpoint: str,
-    index_name: str,
-    documents: list[dict[str, Any]],
-    credential: TokenCredential,
-) -> int:
-    """Replace indexed chunks and return the number of stale chunks deleted.
-
-    Upload and verify new chunks before deleting old ones. This requires
-    a single writer. Updates are not atomic: readers may see old and new
-    chunks while synchronization is in progress.
-    """
-    expected = {document["chunk_id"] for document in documents}
-    if not expected or len(expected) != len(documents):
-        raise ValueError("Refusing to synchronize empty or duplicate Search keys")
-    previous = {
-        item["chunk_id"] for item in _index_rows(endpoint, index_name, credential)
-    }
-    upload_documents(
-        endpoint=endpoint,
-        index_name=index_name,
-        documents=documents,
-        credential=credential,
-    )
-    _wait_for_keys(endpoint, index_name, expected, credential, exact=False)
-    stale = previous - expected
-    _write_actions(
-        endpoint,
-        index_name,
-        [{"@search.action": "delete", "chunk_id": key} for key in sorted(stale)],
-        credential,
-    )
-    _wait_for_keys(endpoint, index_name, expected, credential, exact=True)
-    return len(stale)
-
-
-def validate_index(
-    *,
-    endpoint: str,
-    index_name: str,
-    expected_regions: set[str],
-    expected_document_ids: set[str],
-    expected_chunk_ids: set[str],
-    credential: TokenCredential,
-) -> dict[str, Any]:
-    """Verify index coverage and return a hybrid-search validation summary.
-
-    Raise RuntimeError if regions, documents, or chunks differ from the
-    expected sets, or if the hybrid query returns no results.
-    """
-    rows = _index_rows(endpoint, index_name, credential)
-    actual = {
-        "regions": {row.get("region") for row in rows},
-        "documentIds": {row.get("document_id") for row in rows},
-        "chunkIds": {row["chunk_id"] for row in rows},
-    }
-    for label, expected in (
-        ("regions", expected_regions),
-        ("documentIds", expected_document_ids),
-        ("chunkIds", expected_chunk_ids),
-    ):
-        if actual[label] != expected:
-            raise RuntimeError(
-                f"Search {label} coverage differs from the ingestion manifest"
-            )
-    with SearchClient(
-        endpoint, index_name, credential, api_version=SEARCH_API_VERSION
-    ) as client:
-        results = list(
+            raise TimeoutError("Search key enumeration timed out")
+        key_filter = document_filter
+        if last_key:
+            escaped_key = last_key.replace("'", "''")
+            key_filter += f" and chunk_id gt '{escaped_key}'"
+        page = list(
             client.search(
-                search_text="leave holiday policy",
-                query_type="semantic",
-                semantic_configuration_name="ask-hr-semantic",
-                semantic_error_mode="fail",
-                vector_queries=[
-                    VectorizableTextQuery(
-                        text="leave holiday policy",
-                        fields="chunk_vector",
-                        k_nearest_neighbors=50,
-                    )
-                ],
-                select=["chunk_id", "document_id", "region"],
-                top=5,
+                search_text="*",
+                select=["chunk_id"],
+                order_by=["chunk_id asc"],
+                top=1000,
+                filter=key_filter,
+                timeout=remaining,
+                read_timeout=min(30, remaining),
+                connection_timeout=min(30, remaining),
             )
         )
-    if not results:
-        raise RuntimeError("Hybrid Search validation returned no documents")
-    return {
-        "chunks": len(rows),
-        "documents": len(expected_document_ids),
-        "regions": sorted(expected_regions),
-        "hybridQuery": results,
-    }
+        if not page:
+            return chunk_ids
+        keys = [item.get("chunk_id") for item in page]
+        if any(
+            not isinstance(key, str) or key <= last_key for key in keys
+        ) or keys != sorted(set(keys)):
+            raise RuntimeError(
+                "Search key enumeration did not advance in unique key order"
+            )
+        chunk_ids.update(keys)
+        if len(page) < 1000:
+            return chunk_ids
+        last_key = keys[-1]
+
+
+def synchronize_document(
+    *,
+    client: SearchClient,
+    sender_factory: Callable[..., SearchIndexingBufferedSender],
+    document_id: str,
+    documents: list[dict[str, Any]],
+) -> int:
+    """
+    Replace one PDF's chunks, or remove them for a deleted PDF.
+
+    Read this PDF's existing keys before writing. Require successful upload
+    acknowledgements before deleting old keys absent from the new chunk set.
+    Run only one writer at a time. No read-back verification or visibility
+    polling is performed; queries may briefly see old and new records.
+
+    Parameters
+    ----------
+    client : SearchClient
+        Client used to read existing keys for this PDF only.
+        The caller is responsible for closing it.
+    sender_factory : callable
+        Function that creates buffered writers for the same index as
+        ``client``. Uploads and deletions use separate writers.
+    document_id : str
+        Stable source PDF ID stored in each chunk's ``document_id`` field.
+    documents : list of dict
+        Complete replacement chunk set for this PDF, including embeddings.
+        Each must have a unique ``chunk_id`` and the supplied ``document_id``.
+        An empty list deletes this PDF's existing chunks.
+
+    Returns
+    -------
+    int
+        Number of obsolete keys with successful deletion acknowledgements.
+    """
+    uploaded_keys = {document["chunk_id"] for document in documents}
+    if (
+        not isinstance(document_id, str)
+        or not document_id
+        or len(uploaded_keys) != len(documents)
+        or any(not isinstance(key, str) or not key for key in uploaded_keys)
+        or any(document.get("document_id") != document_id for document in documents)
+    ):
+        raise ValueError("Expected unique chunk IDs belonging to the supplied PDF")
+    previous = _document_chunk_ids(client, document_id)
+    if documents:
+        upload_documents(
+            sender_factory=sender_factory,
+            documents=documents,
+        )
+    stale = previous - uploaded_keys
+    _write_actions(
+        sender_factory,
+        [{"@search.action": "delete", "chunk_id": key} for key in sorted(stale)],
+    )
+    return len(stale)

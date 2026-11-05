@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "review": {
+    "status": "assistant_source_checked",
+    "basis": "Assistant-authored references independently derived from the source PDF pages, not from generated answers or judge scores. PDF hashes and quoted passages were checked against the ingestion analysis for those PDF bytes. These are fictional demo-policy references, not independent human or HR-expert adjudication. Review them before using this suite as a customer acceptance gate.",
+    "scope": "Required facts relevant to each question, not every detail in the source document. The original cases and their expected behavior remain unchanged. Cases explicitly expecting zero citations retain their clarification/no-policy checks and have no policy-answer reference."
+  },
+  "sources": [
+    {
+      "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+      "path": "..\\data\\hongkong\\HongKong_HR_Payroll_MPF_and_Benefits_zh-HK.pdf",
+      "sha256": "2deeadaeeaaf0a1680d3bd015ecfa636b7a4e9eba03308227c13e6aa247ec819"
+    },
+    {
+      "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+      "path": "..\\data\\global\\Global_HR_Policy_Handbook.pdf",
+      "sha256": "d43730a7adbe22365654ca7561becf8b43dd1d2bb3833f42f8b86188b39e8d80"
+    },
+    {
+      "document_id": "376b6ef8-695f-593e-922b-8edbb78225a8",
+      "path": "..\\data\\finland\\Finland_HR_Employment_Contracts_and_Termination.pdf",
+      "sha256": "4d7c2b5d39af8922bd98807bf1f0d0eceab434baa35984e3bb6f65c8c8a3d8b1"
+    },
+    {
+      "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+      "path": "..\\data\\finland\\Finland_HR_Working_Hours_Pay_and_Benefits.pdf",
+      "sha256": "9f51297351c454e71b1f03ddf4c954524556b1a58dbf5eef79dd2ae4c3753f89"
+    },
+    {
+      "document_id": "6d18bb8e-1078-54ee-b224-301b9a17716a",
+      "path": "..\\data\\finland\\Finland_HR_Leave_and_Holidays.pdf",
+      "sha256": "c2f42f7006afe0aaba6aa526cbbd1119438078d6d5f6a0069db27c40d1aac693"
+    },
+    {
+      "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+      "path": "..\\data\\hongkong\\HongKong_HR_Working_Hours_Leave_and_Holidays_zh-HK.pdf",
+      "sha256": "2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83"
+    },
+    {
+      "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
+      "path": "..\\data\\india\\India_HR_POSH_Equality_and_Workplace_Conduct.pdf",
+      "sha256": "b57a923427abe307f9474b751336d00f8438b3a2bcc149c9ed597f3ba26b3ced"
+    }
+  ],
+  "references": [
+    {
+      "case_id": "AGENT-REGION-TYPO",
+      "query": "What are the Hong Kogn MPF contribution rules?",
+      "ground_truth": "Under the Hong Kong demonstration policy, full-time and part-time employees generally aged 18-64 with at least 60 days of continuous employment must join an MPF scheme within the statutory deadline; exemptions and industry-specific rules are checked separately. Employer and employee contributions use the applicable income ranges and rates. The policy does not supply numeric contribution rates or income limits: Payroll verifies current statutory rates, limits and reporting deadlines against official information before each processing run. Voluntary contributions and account consolidation follow scheme rules, and the company notifies the trustee and supplies required information within statutory time limits when employment ends.",
+      "passages": [
+        {
+          "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+          "page": 2,
+          "quote": "本政策說明香港薪酬管理及強積金程序。所有法定比率、入息上下限及申報期限均由薪酬團隊在每次處理前按最新\n官方資料核實。"
+        },
+        {
+          "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+          "page": 2,
+          "quote": "● 一般而言,18至64歲並連續受僱60日或以上的全職及兼職僱員須按法定時限參加強積金計劃;獲豁免人士及行\n業特別規則另行核實。\n\n● 僱員及僱主供款按當時適用的入息範圍及比率計算。\n\n● 自願性供款、可扣稅自願性供款及帳戶整合按計劃規則處理。\n\n● 離職時,公司在法定時限內通知受託人並提供所需資料。"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-LOCAL-PRECEDENCE",
+      "query": "How much annual leave do employees receive in Finland?",
+      "ground_truth": "The Finland policy determines the entitlement: employees accrue 2 Finnish arkipäivät per full holiday-credit month if employed for less than one year on 31 March, and 2.5 arkipäivät if employed for at least one year. The holiday-credit year is 1 April to 31 March; a full month is determined under the 14-day or 35-hour rule. The Finland entitlement is not replaced by a Global leave allowance.",
+      "passages": [
+        {
+          "document_id": "6d18bb8e-1078-54ee-b224-301b9a17716a",
+          "page": 2,
+          "quote": "· Lomanmääräytymisvuosi on 1.4 .- 31.3.\n\n· Täysi kuukausi määräytyy 14 päivän tai 35 tunnin säännön mukaan."
+        },
+        {
+          "document_id": "6d18bb8e-1078-54ee-b224-301b9a17716a",
+          "page": 2,
+          "quote": "<th>Työsuhteen kesto 31.3.</th>\n<th>Ansainta täydeltä lomanmääräytymiskuukaudelta</th>\n</tr>\n<tr>\n<td>Alle yksi vuosi</td>\n<td>2 arkipäivää</td>\n</tr>\n<tr>\n<td>Vähintään yksi vuosi</td>\n<td>2,5 arkipäivää</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-GLOBAL-SUPPLEMENT",
+      "query": "What responsible AI rules apply to employees in India?",
+      "ground_truth": "The Global handbook supplies the responsible-AI baseline for employees in India; these are Global rules, not a quoted India-specific policy. Employee data must be collected and used for defined, lawful and proportionate purposes. Employees must use approved systems, multifactor authentication and appropriate data classification, must not upload confidential employee or customer data to unapproved AI tools, and AI-assisted employment decisions require meaningful human review and documented fairness checks. Any India-specific requirements not established by the available policy should be confirmed rather than invented.",
+      "passages": [
+        {
+          "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+          "page": 3,
+          "quote": "· Collect and use employee data only for defined, lawful and proportionate purposes.\n\n· Use approved systems, multifactor authentication and appropriate data classification.\n\n· Do not upload confidential employee or customer data into unapproved Al tools.\n\n· Al-assisted employment decisions require meaningful human review and documented fairness checks."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-EXPLICIT-COMPARISON",
+      "query": "Compare annual leave in Finland and Hong Kong.",
+      "ground_truth": "Under the local demonstration policies, Finland uses accrual per full holiday-credit month: 2 arkipäivät when employment is under one year on 31 March, or 2.5 arkipäivät at one year or more. Its holiday-credit year is 1 April-31 March, with full months determined by the 14-day or 35-hour rule. Hong Kong provides 14 paid working days per calendar year, no less than the applicable statutory entitlement, prorated in joining and leaving years. These are different policy units and accounting periods; each country's local policy supplies its entitlement, not an overriding Global allowance.",
+      "passages": [
+        {
+          "document_id": "6d18bb8e-1078-54ee-b224-301b9a17716a",
+          "page": 2,
+          "quote": "<td>Alle yksi vuosi</td>\n<td>2 arkipäivää</td>\n</tr>\n<tr>\n<td>Vähintään yksi vuosi</td>\n<td>2,5 arkipäivää</td>"
+        },
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "● 公司每個曆年提供14個有薪工作日年假,不少於當時法定權益。\n\n● 新入職及離職年度按比例計算。"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-MULTILINGUAL-FI",
+      "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
+      "ground_truth": "Suomen demopolitiikan taulukon mukaan työntekijän irtisanomisaika on 14 päivää, kun työsuhde on kestänyt enintään neljä vuotta, ja yksi kuukausi, kun työsuhde on kestänyt yli neljä vuotta. Tämä vastaa taulukon työntekijäsaraketta, ei työnantajan pidempiä irtisanomisaikoja. Pakottava lainsäädäntö, sovellettava työehtosopimus ja työsopimus ovat ensisijaisia.",
+      "passages": [
+        {
+          "document_id": "376b6ef8-695f-593e-922b-8edbb78225a8",
+          "page": 2,
+          "quote": "<th>Työsuhteen kesto</th>\n<th>Työnantajan irtisanomisaika</th>\n<th>Työntekijän irtisanomisaika</th>\n</tr>\n<tr>\n<td>Enintään 1 vuosi</td>\n<td>14 päivää</td>\n<td>14 päivää</td>\n</tr>\n<tr>\n<td>Yli 1-4 vuotta</td>\n<td>1 kuukausi</td>\n<td>14 päivää</td>\n</tr>\n<tr>\n<td>Yli 4-8 vuotta</td>\n<td>2 kuukautta</td>\n<td>1 kuukausi</td>\n</tr>\n<tr>\n<td>Yli 8-12 vuotta</td>\n<td>4 kuukautta</td>\n<td>1 kuukausi</td>\n</tr>\n<tr>\n<td>Yli 12 vuotta</td>\n<td>6 kuukautta</td>\n<td>1 kuukausi</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-MULTILINGUAL-HK",
+      "query": "香港僱員有多少天年假？",
+      "ground_truth": "根據香港公司的示範政策，每個曆年提供14個有薪工作日年假，不少於當時適用的法定權益。新入職或離職年度的年假按比例計算。這是公司政策的安排，而非對所有香港僱員法定年假的概括。",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "● 公司每個曆年提供14個有薪工作日年假,不少於當時法定權益。\n\n● 新入職及離職年度按比例計算。"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-CITATIONS",
+      "query": "What is the India POSH complaint process?",
+      "ground_truth": "Under the India policy, managers refer reports to the Internal Committee rather than investigating independently. A written complaint is normally made within three months; notice and response follow promptly after acceptance. Conciliation is optional, only at the complainant's request, and cannot be based on monetary settlement. The inquiry has a target completion within 90 days, followed by written findings and a timely employer response. Information is shared only on a need-to-know basis; interim protection must not penalise the reporting person, and retaliation or witness intimidation is serious misconduct. The statutory POSH process is available to women complainants, with an equivalent company investigation available to all genders.",
+      "passages": [
+        {
+          "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
+          "page": 2,
+          "quote": "· The statutory POSH process is available to women complainants; equivalent company investigation is available\nto all genders.\n\n· Managers must refer reports to the Internal Committee and must not conduct their own investigation."
+        },
+        {
+          "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
+          "page": 2,
+          "quote": "<td>Written complaint</td>\n<td>Normally within three months</td>\n</tr>\n<tr>\n<td>Notice and response</td>\n<td>Promptly after acceptance</td>\n</tr>\n<tr>\n<td>Optional conciliation</td>\n<td>Only at complainant request; no monetary settlement basis</td>\n</tr>\n<tr>\n<td>Inquiry</td>\n<td>Target completion within 90 days</td>\n</tr>\n<tr>\n<td>Report and action</td>\n<td>Written findings and timely employer response</td>"
+        },
+        {
+          "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
+          "page": 2,
+          "quote": "· Identity, evidence, proceedings and outcomes are shared only on a need-to-know basis.\n\n· Interim measures may change reporting lines, workplace, schedules or leave without penalising the reporting\nperson.\n\n· Retaliation or witness intimidation is serious misconduct."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-FI-TIME-ATTENDANCE",
+      "query": "How are working hours and overtime handled in Finland?",
+      "ground_truth": "The Finland company policy sets 37.5 hours per week, normally Monday-Friday, and 7.5 hours per day, with core time 09:00-15:00 and daily recording of working time. Additional work and overtime require employee consent and advance manager approval. Daily overtime pays a 50% premium for the first two hours and a 100% premium thereafter. Sunday work attracts a separate premium under law and the applicable collective agreement. Total working time must not exceed an average of 48 hours per week over the applicable reference period.",
+      "passages": [
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 2,
+          "quote": "<td>Viikkotyöaika</td>\n<td>37,5 tuntia, yleensä maanantaista perjantaihin</td>\n</tr>\n<tr>\n<td>Päivittäinen työaika</td>\n<td>7,5 tuntia</td>\n</tr>\n<tr>\n<td>Ydinaika</td>\n<td>09.00-15.00</td>"
+        },
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 2,
+          "quote": "· Lisätyö ja ylityö edellyttävät työntekijän suostumusta ja esimiehen ennakkohyväksyntää.\n\n· Päivittäisen ylityön kahdelta ensimmäiseltä tunnilta maksetaan 50 prosentin ja seuraavilta tunneilta 100\nprosentin korotus.\n\n· Sunnuntaityöstä maksetaan erillinen korotus lain ja työehtosopimuksen mukaan.\n\n· Kokonais työaika ei saa ylittää keskimäärin 48 tuntia viikossa sovellettavalla tarkastelujaksolla."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-FI-PAYROLL",
+      "query": "When is salary paid in Finland and what benefits are included?",
+      "ground_truth": "Salary is paid on the month's last banking day. The Finland demonstration benefits include statutory TyEL pension, unemployment, accident and group life insurance; preventive occupational healthcare from the first working day plus GP-level care, early support and return-to-work support. Voluntary benefits are a EUR 13 lunch benefit per working day, EUR 400 annual exercise/culture benefit, commuting support up to EUR 800 per year, a bicycle leasing programme under current tax rules, and a one-time EUR 300 allowance for approved home-office ergonomics. The demo holiday bonus is 50% of holiday pay, paid with June salary; it derives from the collective or employment agreement, not the Annual Holidays Act.",
+      "passages": [
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 2,
+          "quote": "· Kuukausipalkka maksetaan kuukauden viimeisenä pankkipäivänä."
+        },
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 3,
+          "quote": "Lomaraha ei perustu vuosilomalakiin vaan työehtosopimukseen tai työsopimukseen. Tässä demossa lomaraha on\n50 prosenttia lomapalkasta ja maksetaan kesäkuun palkan yhteydessä."
+        },
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 3,
+          "quote": "· TyEL-eläkevakuutus, työttömyysvakuutus, tapaturmavakuutus ja ryhmähenkivakuutus järjestetään lain mukaan.\n\n· Ehkäisevä työterveyshuolto kattaa kaikki työntekijät ensimmäisestä työpäivästä.\n\n· Contoso tarjoaa lisäksi yleislääkäritasoisen sairaanhoidon, varhaisen tuen ja työhön paluun tuen."
+        },
+        {
+          "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
+          "page": 3,
+          "quote": "<td>Lounasetu</td>\n<td>13 euroa työpäivältä</td>\n</tr>\n<tr>\n<td>Liikunta- ja kulttuurietu</td>\n<td>400 euroa vuodessa</td>\n</tr>\n<tr>\n<td>Työmatkaetu</td>\n<td>Enintään 800 euroa vuodessa</td>\n</tr>\n<tr>\n<td>Polkupyöräetu</td>\n<td>Leasing-ohjelma voimassa olevien verosääntöjen mukaan</td>\n</tr>\n<tr>\n<td>Kotitoimisto</td>\n<td>300 euron kertakorvaus hyväksyttyyn ergonomiaan</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-OPERATIVE-DEADLINE",
+      "query": "What is the target timeline for completing an India POSH inquiry?",
+      "ground_truth": "The India POSH policy states the inquiry timing verbatim: \"Target completion within 90 days\". This is the inquiry target, not the separate three-month written-complaint window. The policy does not say 90 working days.",
+      "passages": [
+        {
+          "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
+          "page": 2,
+          "quote": "<td>Inquiry</td>\n<td>Target completion within 90 days</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-PERFORMANCE-GUIDE",
+      "query": "How does Contoso handle performance improvement and employee development for employees in Finland?",
+      "ground_truth": "The Global handbook provides the baseline for this topic: goals and expectations are documented and discussed regularly; performance decisions use evidence and do not penalise protected leave or accommodations. Employees receive an annual learning allowance and may apply for internal roles. A formal improvement process includes clear objectives, support and review dates. These are the Global handbook's provisions, not a quoted Finland-specific performance policy; no allowance amount or fixed improvement-plan duration is specified.",
+      "passages": [
+        {
+          "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+          "page": 3,
+          "quote": "· Goals and expectations are documented and discussed regularly.\n\n· Performance decisions use evidence and do not penalise protected leave or accommodations.\n\n· Employees receive an annual learning allowance and may apply for internal roles.\n\n· A formal improvement process includes clear objectives, support and review dates."
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-REGION-LABEL",
+      "query": "What is the maternity leave policy in Hong Kong?",
+      "ground_truth": "The Hong Kong demonstration policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration. This is the Hong Kong company's policy arrangement. Statutory maternity arrangements follow the Employment Ordinance, with statutory eligibility conditions governed by the Labour Department's latest announcements; the supplied policy does not enumerate those conditions.",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "<td>產假</td>\n<td>不少於法定期限;公司示範安排為16星期全薪</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-HK-ANNUAL-LEAVE",
+      "query": "How many days of annual leave do Hong Kong employees receive?",
+      "ground_truth": "Under the Hong Kong company's demonstration policy, employees receive 14 paid working days of annual leave per calendar year, no less than the applicable statutory entitlement. Leave is prorated in joining and leaving years. This describes the company policy, not the statutory entitlement of all Hong Kong employees.",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "● 公司每個曆年提供14個有薪工作日年假,不少於當時法定權益。\n\n● 新入職及離職年度按比例計算。"
+        }
+      ]
+    }
+  ]
+}

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from azure.ai.documentintelligence import DocumentIntelligenceClient
+from json_output import write_json_atomic
 
 from .document_parser import (
     ANALYSIS_API_VERSION,
@@ -18,8 +17,8 @@ from .document_parser import (
     STRING_INDEX_TYPE,
     analyze_local_pdf,
 )
-from .manifest import verify_source
 from .page import ContentBlock, Page, TextLine
+from .sources import verify_source
 
 ANALYSIS_CACHE_SCHEMA_VERSION = 4
 
@@ -88,55 +87,59 @@ def _read_pages(payload: dict[str, Any]) -> list[Page]:
 
 
 def _write_cache(path: Path, metadata: dict[str, Any], pages: list[Page]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, delete=False
-        ) as output:
-            temporary_path = Path(output.name)
-            json.dump(
-                {"metadata": metadata, "pages": [asdict(page) for page in pages]},
-                output,
-                ensure_ascii=False,
-                indent=2,
-                allow_nan=False,
-            )
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    write_json_atomic(
+        path, {"metadata": metadata, "pages": [asdict(page) for page in pages]},
+    )
 
 
 def load_or_analyze_pages(
     *,
     client: DocumentIntelligenceClient,
-    path: Path,
-    output_path: Path,
-    reuse_analysis: bool,
-    retain_analysis: bool,
-    document_id: str,
-    document_version: str,
-    source_sha256: str,
+    source: dict[str, Any],
+    analysis_dir: Path,
 ) -> list[Page]:
-    """Load matching cached pages or analyze the local PDF.
-
-    An existing cache requested for reuse must match the source and parser
-    settings; a mismatch raises ValueError. Save newly analyzed pages to
-    output_path only when retain_analysis is True.
     """
-    verify_source(path, source_sha256)
-    metadata = _cache_metadata(document_id, document_version, source_sha256)
-    if reuse_analysis and output_path.exists():
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("metadata") != metadata:
-            raise ValueError(
-                f"Analysis cache is stale for {document_id} v{document_version}: {output_path}. "
-                "Reanalyze without --reuse-analysis."
-            )
-        return _read_pages(payload)
+    Read saved PDF analysis or run Document Intelligence.
+
+    Parameters
+    ----------
+    client : DocumentIntelligenceClient
+        Client used to analyze the PDF.
+    source : dict
+        PDF file record returned by ``discover_sources``.
+    analysis_dir : pathlib.Path
+        Local directory for saved analysis. Missing, outdated, or damaged
+        results are regenerated automatically.
+
+    Returns
+    -------
+    list of Page
+        Pages containing extracted text, tables, and text coordinates.
+
+    Raises
+    ------
+    ValueError
+        The PDF changed after discovery.
+    """
+    path = Path(source["localPath"])
+    verify_source(path, source["sha256"])
+    output_path = (
+        analysis_dir / source["documentId"] / source["version"]
+        / f"{source['sha256']}.json"
+    )
+    metadata = _cache_metadata(
+        source["documentId"], source["version"], source["sha256"],
+    )
+    if output_path.exists():
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and payload.get("metadata") == metadata:
+                pages = _read_pages(payload)
+                if pages:
+                    return pages
+        except (ValueError, KeyError, TypeError):
+            pass
     pages = analyze_local_pdf(client=client, path=path)
-    verify_source(path, source_sha256)
-    if retain_analysis:
-        _write_cache(output_path, metadata, pages)
+    verify_source(path, source["sha256"])
+    _write_cache(output_path, metadata, pages)
     return pages

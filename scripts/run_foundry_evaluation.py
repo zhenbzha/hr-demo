@@ -24,6 +24,7 @@ from evaluation.cases import (
     validate_case_result,
 )
 from evaluation.foundry import BEHAVIOR_PROMPT, EvaluationSettings
+from evaluation.references import load_policy_references, policy_dataset_rows
 from evaluation.replay import compare_reference_judgments, load_reference_replay
 from evaluation.runner import (
     captured_dataset_rows,
@@ -34,6 +35,15 @@ from evaluation.runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_dataset_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Write evaluation rows as UTF-8 JSONL to an existing output directory."""
+    content = "".join(
+        json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
+        for row in rows
+    )
+    path.write_text(content, encoding="utf-8")
 
 
 def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
@@ -92,6 +102,13 @@ def _validate_arguments(
         parser.error("behavior_threshold must be between 1 and 5")
     if not args.cases.is_file():
         parser.error(f"Cases file does not exist: {args.cases}")
+    if (
+        not args.check_sdk
+        and args.benchmark_report is None
+        and args.replay_cases is None
+        and not args.references.is_file()
+    ):
+        parser.error(f"Policy reference file does not exist: {args.references}")
     if args.benchmark_report is not None and not args.benchmark_report.is_file():
         parser.error(f"Benchmark report does not exist: {args.benchmark_report}")
     if args.replay_cases is not None:
@@ -143,6 +160,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / ".foundry")
     parser.add_argument(
+        "--references",
+        type=Path,
+        default=PROJECT_ROOT / "tests" / "agent-quality-references.json",
+        help="PDF-backed expected answers for hosted policy-answer evaluation.",
+    )
+    parser.add_argument(
         "--prepare-replay",
         action="store_true",
         help="Validate and save replay inputs and reference provenance without Azure calls.",
@@ -156,7 +179,10 @@ def parse_args() -> argparse.Namespace:
         "--require-behavior-pass",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Optional strict exit status; also rejects unverified hard checks. Default: manual diagnostic report.",
+        help=(
+            "Fail on citation, HR behavior, or applicable policy-answer failures. "
+            "Default: manual review."
+        ),
     )
     parser.add_argument(
         "--retain-dataset", action=argparse.BooleanOptionalAction, default=False
@@ -172,9 +198,27 @@ def collect_responses(
     credential: TokenCredential,
     summary: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Collect dataset rows sequentially and record each case's checks.
+    """
+    Ask the agent each test question and prepare rows for scoring.
 
-    Update summary with check results for every completed response.
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line settings returned by ``parse_args``.
+    cases : list of dict
+        Test questions and expectations returned by ``load_cases``.
+    credential : TokenCredential
+        Entra credential for Foundry and delegated Search access.
+    summary : dict
+        Report to update with per-case checks. ``collecting_case``
+        identifies the current case if response collection fails.
+
+    Returns
+    -------
+    list of dict
+        One row per response, containing the question, answer, citations,
+        supporting policy text, and expected behavior. Includes answers
+        whose citation checks failed.
     """
     rows = []
     summary["case_checks"] = []
@@ -196,7 +240,6 @@ def collect_responses(
                 "response_id": result.response_id,
                 "status": checks.status,
                 "failures": checks.failures,
-                "unverified": checks.unverified,
             }
         )
         rows.append(evaluation_row(case, result))
@@ -208,24 +251,61 @@ def collect_responses(
 def enforce_optional_pass_requirement(
     args: argparse.Namespace, summary: dict[str, Any]
 ) -> None:
+    """
+    Raise an error if required quality checks did not pass.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        CLI settings; ``require_behavior_pass`` enables the gate.
+    summary : dict
+        Report containing rule-based checks (``case_checks``) and
+        HR behavior scores (``expected_behavior``). The PDF-reference profile
+        also includes policy-answer scores (``policy_answers``).
+
+    Raises
+    ------
+    RuntimeError
+        The gate is enabled and any deterministic check is
+        failed, or any expected-behavior judgment fails.
+        With the gate disabled, low scores remain diagnostic results.
+    """
     if not args.require_behavior_pass:
         return
     if any(case["status"] != "passed" for case in summary["case_checks"]):
         raise RuntimeError(
-            "Some hard requirements failed or were not observable; see the manual report"
+            "Some answer/citation requirements failed; see the evaluation results"
         )
     results = summary["expected_behavior"]["cases"]
     if any(not result["passed"] for case in results for result in case["results"]):
         raise RuntimeError(
             "Expected-behavior scores did not meet the configured threshold"
         )
+    if any(
+        not result["passed"]
+        for case in summary.get("policy_answers", {}).get("cases", [])
+        for result in case["results"]
+    ):
+        raise RuntimeError(
+            "Policy-answer scores did not meet the built-in thresholds"
+        )
 
 
 def score_benchmark_report(args: argparse.Namespace) -> None:
-    """Validate a saved benchmark and score its captured answers with Foundry.
+    """
+    Validate a saved benchmark and score its captured answers with Foundry.
 
     Require matching cases, rubric, and scoring options. Reuse the captured
-    responses and write scoring results back to args.benchmark_report.
+    responses without invoking an agent. Scoring results overwrite the report,
+    including on failure; preserve a separate copy before rescoring.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Validated CLI settings. ``benchmark_report`` identifies an
+        incomplete scoring report whose response collection completed;
+        ``cases``, project, judge, threshold, and dataset settings must
+        agree with that capture.
     """
     cases = load_cases(args.cases)
     summary = json.loads(args.benchmark_report.read_text(encoding="utf-8"))
@@ -267,13 +347,7 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
             tempfile.TemporaryDirectory(prefix="ask-hr-scoring-") as temporary,
         ):
             dataset_path = Path(temporary) / "responses.jsonl"
-            dataset_path.write_text(
-                "".join(
-                    json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
-                    for row in rows
-                ),
-                encoding="utf-8",
-            )
+            _write_dataset_rows(dataset_path, rows)
             score_dataset(
                 project_endpoint=args.project_endpoint,
                 dataset_name=args.dataset_name,
@@ -300,7 +374,25 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
 
 
 def score_replay_cases(args: argparse.Namespace) -> None:
-    cases = load_cases(args.cases)
+    """
+    Prepare or score reviewed saved answers to check the evaluators.
+
+    Save new evaluation inputs locally and submit them to Foundry for scoring.
+    Original answers and capture files remain unchanged. The comparison
+    measures whether evaluators agree with the reviewed labels on these
+    saved answers.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line settings. ``replay_cases`` selects saved answers and
+        their reference files; ``cases`` selects the original questions.
+        Project, judge model, and threshold must match the saved evaluation.
+        ``output_dir`` receives new datasets and reports. ``prepare_replay``
+        saves validated inputs locally for review; otherwise scoring
+        requires completed review and submits the inputs to Foundry.
+    """
+    cases = load_cases(args.cases, historical=True)
     replay = load_reference_replay(
         args.replay_cases,
         cases=cases,
@@ -329,7 +421,7 @@ def score_replay_cases(args: argparse.Namespace) -> None:
         "judge_deployment": args.model_deployment,
         "behavior_threshold": args.behavior_threshold,
         "behavior_evaluator": replay.provenance["manifest"]["behavior_evaluator"],
-        "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
+        "rubric_sha256": replay.provenance["rubric_sha256"],
         "agent": {"name": "ask-hr", "version": "multiple_captured_local_versions"},
         "responses_regenerated": 0,
         "reference_review": replay.provenance["manifest"]["review"],
@@ -383,6 +475,7 @@ def main() -> None:
         score_replay_cases(args)
         return
     cases = load_cases(args.cases)
+    references = load_policy_references(args.references, cases)
     version = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     summary_path = args.output_dir / "results" / f"evaluation-summary-{version}.json"
     summary = {
@@ -391,6 +484,8 @@ def main() -> None:
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
         "judge_deployment": args.model_deployment,
+        "behavior_threshold": args.behavior_threshold,
+        "reference_answers": references.provenance,
         "agent": {
             "name": args.agent_name,
             "version": args.agent_version,
@@ -406,18 +501,14 @@ def main() -> None:
             tempfile.TemporaryDirectory(prefix="ask-hr-evaluation-") as temporary,
         ):
             rows = collect_responses(args, cases, credential, summary)
+            rows = policy_dataset_rows(rows, references)
             dataset_dir = (
                 args.output_dir / "datasets" if args.retain_dataset else Path(temporary)
             )
             dataset_dir.mkdir(parents=True, exist_ok=True)
             dataset_path = dataset_dir / f"evaluation-{version}.jsonl"
-            dataset_path.write_text(
-                "".join(
-                    json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
-                    for row in rows
-                ),
-                encoding="utf-8",
-            )
+            _write_dataset_rows(dataset_path, rows)
+            summary["dataset_sha256"] = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
             score_dataset(
                 project_endpoint=args.project_endpoint,
                 dataset_name=args.dataset_name,
@@ -434,12 +525,18 @@ def main() -> None:
                 summary_path=summary_path,
                 case_ids={case["id"] for case in cases},
                 request_timeout=args.request_timeout,
+                policy_case_ids=set(references.answers),
             )
             summary["status"] = "completed"
             enforce_optional_pass_requirement(args, summary)
     finally:
         write_summary(summary_path, summary)
     print(f"Evaluation report: {summary_path}")
+    assessment = summary["assessment"]
+    print(
+        f"HR requirements: {assessment['passed']} passed, "
+        f"{assessment['failed']} failed (PDF-reference profile)."
+    )
 
 
 if __name__ == "__main__":

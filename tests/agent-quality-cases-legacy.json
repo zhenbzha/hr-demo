@@ -1,0 +1,250 @@
+{
+  "runWhen": "After the Ask HR hosted agent and retrieval orchestration are implemented",
+  "hardPassRule": "Every case marked hardRequirement must pass before deployment.",
+  "cases": [
+    {
+      "id": "AGENT-REGION-CLARIFY",
+      "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
+      "query": "How much annual leave do I receive?",
+      "expectedRegionClassification": {
+        "regions": [],
+        "status": "clarify"
+      },
+      "expectedBehavior": [
+        "Ask which employment region applies.",
+        "Do not call document retrieval before clarification.",
+        "Do not provide a regional entitlement."
+      ]
+    },
+    {
+      "id": "AGENT-REGION-TYPO",
+      "hardRequirement": true,
+      "query": "What are the Hong Kogn MPF contribution rules?",
+      "expectedRegionClassification": {
+        "regions": ["hongkong"],
+        "status": "retrieve"
+      },
+      "expectedRetrievalRegions": ["hongkong", "global"],
+      "expectedDocumentIds": ["HR-HK-002"],
+      "forbiddenRegions": ["india", "finland"]
+    },
+    {
+      "id": "AGENT-LOCAL-PRECEDENCE",
+      "hardRequirement": true,
+      "query": "How much annual leave do employees receive in Finland?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedRetrievalRegions": ["finland", "global"],
+      "expectedPrimaryDocumentIds": ["HR-FI-003"],
+      "assertions": [
+        "The Finland policy supplies the entitlement.",
+        "Global evidence may provide context but must not override the Finland policy.",
+        "Any conflict is resolved in favor of the Finland policy."
+      ]
+    },
+    {
+      "id": "AGENT-GLOBAL-SUPPLEMENT",
+      "hardRequirement": true,
+      "query": "What responsible AI rules apply to employees in India?",
+      "expectedRegionClassification": {
+        "regions": ["india"],
+        "status": "retrieve"
+      },
+      "expectedRetrievalRegions": ["india", "global"],
+      "expectedSupportingDocumentIds": ["HR-POL-001"],
+      "assertions": [
+        "Global evidence can answer a topic not covered by the local document set.",
+        "The answer clearly labels the evidence as a Global baseline."
+      ]
+    },
+    {
+      "id": "AGENT-EXPLICIT-COMPARISON",
+      "hardRequirement": true,
+      "query": "Compare annual leave in Finland and Hong Kong.",
+      "expectedRegionClassification": {
+        "regions": ["finland", "hongkong"],
+        "status": "retrieve"
+      },
+      "expectedRetrievalRegions": ["finland", "hongkong", "global"],
+      "expectedDocumentIds": ["HR-FI-003", "HR-HK-003"],
+      "forbiddenRegions": ["india"]
+    },
+    {
+      "id": "AGENT-MULTILINGUAL-FI",
+      "hardRequirement": true,
+      "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-FI-001"],
+      "assertions": [
+        "The Finnish source is retrieved from its original-language text.",
+        "The answer preserves a citation to the Finnish document and pages."
+      ]
+    },
+    {
+      "id": "AGENT-MULTILINGUAL-HK",
+      "hardRequirement": true,
+      "query": "香港僱員有多少天年假？",
+      "expectedRegionClassification": {
+        "regions": ["hongkong"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-HK-003"],
+      "assertions": [
+        "The Traditional Chinese source is retrieved from its original-language text.",
+        "The answer preserves a citation to the Hong Kong document and pages."
+      ]
+    },
+    {
+      "id": "AGENT-NO-EVIDENCE",
+      "hardRequirement": true,
+      "expectedCitationCount": 0,
+      "query": "What company policy covers private aircraft maintenance reimbursement in Finland?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedBehavior": [
+        "State in employee-facing language that the available policy does not cover the request.",
+        "Do not invent a policy or entitlement.",
+        "Do not cite an unrelated document."
+      ]
+    },
+    {
+      "id": "AGENT-CITATIONS",
+      "hardRequirement": true,
+      "query": "What is the India POSH complaint process?",
+      "expectedDocumentIds": ["HR-IN-004"],
+      "requiredCitationFields": [
+        "chunk_id",
+        "document_id",
+        "document_title",
+        "region",
+        "page_start",
+        "page_end",
+        "document_path",
+        "annotation_path",
+        "chunk_text"
+      ]
+    },
+    {
+      "id": "AGENT-EEM-NO-EVIDENCE",
+      "workbookRefs": ["ACT-011"],
+      "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
+      "query": "Which countries are currently included in the EEM region?",
+      "expectedBehavior": [
+        "Do not invent a country list.",
+        "Ask which supported employment region applies before retrieval.",
+        "Do not cite an unrelated regional policy."
+      ]
+    },
+    {
+      "id": "AGENT-FI-TIME-ATTENDANCE",
+      "workbookRefs": ["ACT-013"],
+      "hardRequirement": true,
+      "query": "How are working hours and overtime handled in Finland?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-FI-002"],
+      "forbiddenRegions": ["india", "hongkong"]
+    },
+    {
+      "id": "AGENT-FI-PAYROLL",
+      "workbookRefs": ["ACT-017"],
+      "hardRequirement": true,
+      "query": "When is salary paid in Finland and what benefits are included?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-FI-002"],
+      "assertions": [
+        "The answer is grounded in the Finland payroll and benefits policy.",
+        "The answer does not invent a Workday process or unrelated payslip link."
+      ]
+    },
+    {
+      "id": "AGENT-UNSUPPORTED-UK",
+      "workbookRefs": ["ACT-001"],
+      "hardRequirement": true,
+      "expectedRetrieval": false,
+      "expectedCitationCount": 0,
+      "query": "What compensation policy applies to employees in the UK?",
+      "expectedBehavior": [
+        "Recognize that the query asks about the United Kingdom.",
+        "State that no active UK policy is available.",
+        "Do not return Finland, India, or Hong Kong policy as a UK answer."
+      ],
+      "forbiddenRegions": ["finland", "india", "hongkong"]
+    },
+    {
+      "id": "AGENT-OPERATIVE-DEADLINE",
+      "workbookRefs": ["ACT-007"],
+      "hardRequirement": true,
+      "query": "What is the target timeline for completing an India POSH inquiry?",
+      "expectedDocumentIds": ["HR-IN-004"],
+      "assertions": [
+        "The deadline is taken verbatim from the retrieved policy.",
+        "The answer includes the supporting document and page citation.",
+        "The model does not calculate or invent a different deadline."
+      ]
+    },
+    {
+      "id": "AGENT-PERFORMANCE-GUIDE",
+      "workbookRefs": ["ACT-014"],
+      "hardRequirement": true,
+      "query": "How does Contoso handle performance improvement and employee development for employees in Finland?",
+      "expectedRegionClassification": {
+        "regions": ["finland"],
+        "status": "retrieve"
+      },
+      "expectedRetrievalRegions": ["finland", "global"],
+      "expectedDocumentIds": ["HR-POL-001"],
+      "assertions": [
+        "The known Global handbook is retrieved.",
+        "The answer uses the performance, learning, and career-growth section."
+      ]
+    },
+    {
+      "id": "AGENT-REGION-LABEL",
+      "workbookRefs": ["ACT-046"],
+      "hardRequirement": true,
+      "query": "What is the maternity leave policy in Hong Kong?",
+      "expectedDocumentIds": ["HR-HK-003"],
+      "assertions": [
+        "The response explicitly labels the entitlement as Hong Kong policy.",
+        "Any Global evidence is separately labelled as Global baseline context."
+      ]
+    },
+    {
+      "id": "AGENT-HK-ANNUAL-LEAVE",
+      "workbookRefs": ["ACT-028"],
+      "hardRequirement": true,
+      "query": "How many days of annual leave do Hong Kong employees receive?",
+      "expectedRegionClassification": {
+        "regions": ["hongkong"],
+        "status": "retrieve"
+      },
+      "expectedDocumentIds": ["HR-HK-003"],
+      "forbiddenDocumentIds": [
+        "HR-HK-001",
+        "HR-HK-002",
+        "HR-HK-004"
+      ],
+      "assertions": [
+        "The answer states 14 paid working days.",
+        "The answer is grounded in the Hong Kong leave policy."
+      ]
+    }
+  ]
+}

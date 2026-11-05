@@ -45,13 +45,30 @@ def access_token(scope: str, credential: TokenCredential | None = None) -> str:
 def authorization_headers(
     credential: TokenCredential, scope: str
 ) -> Callable[[], dict[str, str]]:
-    """Return a header factory that refreshes expired Entra access tokens."""
+    """
+    Return a header factory that refreshes expired Entra access tokens.
+
+    Parameters
+    ----------
+    credential : TokenCredential
+        Credential used to request Entra access tokens.
+    scope : str
+        Token scope required by the service, such as
+        ``https://search.azure.com/.default``.
+
+    Returns
+    -------
+    callable
+        Function that returns an Authorization header using a current
+        access token.
+    """
     token_provider = get_bearer_token_provider(credential, scope)
     return lambda: {"Authorization": "Bearer " + token_provider()}
 
 
 def retry_delay(headers: Mapping[str, str], attempt: int) -> float:
-    """Return a retry delay in seconds from service headers or backoff.
+    """
+    Return a retry delay in seconds from service headers or backoff.
 
     The attempt number is one-based. Use exponential backoff with jitter
     when no valid retry header is present.
@@ -105,12 +122,42 @@ def request(
     retries: int = 4,
     max_retry_seconds: float = 120,
 ) -> tuple[int, dict[str, str], bytes]:
-    """Send a request and return its status, headers, and response bytes.
+    """
+    Send a request and return its status, headers, and response bytes.
 
-    Only call this for operations that can be repeated safely. The retries
-    argument limits total attempts, including the initial request.
-    max_retry_seconds limits additional attempts; zero disables retries.
-    Retry transport errors and transient HTTP failures only.
+    Only call this for operations that can be repeated safely. Retry transport
+    errors and transient HTTP failures only.
+
+    Parameters
+    ----------
+    method : str
+        HTTP verb, such as GET or POST.
+    url : str
+        Full Azure REST URL, including any API-version query parameter.
+    headers : HeaderSource or None, default=None
+        Header mapping or zero-argument factory called per attempt;
+        use a factory when authentication tokens may need refreshing.
+    json_body : Any or None, default=None
+        Optional JSON-serializable request body.
+    raw_body : bytes or None, default=None
+        Optional raw bytes; cannot be combined with ``json_body``.
+    timeout : float, default=180
+        Initial attempt's timeout in seconds. Later attempts use the
+        smaller of this value and the remaining retry budget.
+    retries : int, default=4
+        Maximum total attempts, including the initial request.
+    max_retry_seconds : float, default=120
+        Retry time budget measured from the first attempt.
+        Zero disables retries but still permits the initial request.
+
+    Returns
+    -------
+    status : int
+        HTTP response status code.
+    response_headers : dict
+        Response headers with lowercase names.
+    body : bytes
+        Response content before decoding.
     """
     if timeout <= 0 or not math.isfinite(timeout) or retries < 1:
         raise ValueError(
@@ -177,10 +224,44 @@ def request_json(
     retries: int = 4,
     max_retry_seconds: float = 120,
 ) -> tuple[int, dict[str, str], dict[str, Any]]:
-    """Send a request and return its status, headers, and JSON object.
+    """
+    Send a request and return its status, headers, and JSON object.
 
-    Treat an empty body as an empty dictionary. Invalid JSON raises
-    JSONDecodeError; a decoded value other than an object raises RuntimeError.
+    Parameters
+    ----------
+    method : str
+        HTTP verb for an operation safe to retry.
+    url : str
+        Full Azure REST URL, including its API version where required.
+    headers : HeaderSource or None, default=None
+        Static headers or a per-attempt factory for refreshed tokens.
+    json_body : Any or None, default=None
+        JSON-serializable request body. Use either this or ``raw_body``.
+    raw_body : bytes or None, default=None
+        Request body supplied as bytes.
+    timeout : float, default=180
+        Initial request timeout in seconds; retries respect the budget.
+    retries : int, default=4
+        Maximum total attempts, including the initial request.
+    max_retry_seconds : float, default=120
+        Time budget for retries, measured from the first attempt.
+        Set to zero to make only the initial request.
+
+    Returns
+    -------
+    status : int
+        HTTP response status code.
+    response_headers : dict
+        Response headers with lowercase names.
+    payload : dict
+        Decoded JSON object, or an empty dictionary for an empty response body.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        A nonempty response body is not valid JSON.
+    RuntimeError
+        The response decodes to a value other than a JSON object.
     """
     status, response_headers, body = request(
         method,

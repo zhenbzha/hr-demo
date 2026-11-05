@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 import urllib.error
+from functools import partial
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from unittest.mock import Mock, patch
 import requests
 from azure.ai.documentintelligence.models import AnalyzeResult
 from azure.core.credentials import AzureKeyCredential
+from azure.search.documents import SearchIndexingBufferedSender
 from configure_ask_hr_knowledge import knowledge_source_definition
 from ingestion import azure_http, document_parser, search_index
 from ingestion.page import Page
@@ -38,7 +40,6 @@ def policy_metadata() -> dict:
         "language": "en",
         "version": "1.0",
         "policyTopic": "leave",
-        "sourceUrl": "https://contoso.example/policy.pdf",
         "sha256": "a" * 64,
         "documentPath": "documents/HR-TEST-001/1.0.pdf",
         "annotationPath": "annotations/HR-TEST-001/1.0.json",
@@ -51,6 +52,16 @@ def embedding_client(payload: dict) -> Mock:
     client.__exit__ = Mock(return_value=False)
     client.embeddings.create.return_value.model_dump.return_value = payload
     return client
+
+
+def buffered_sender_factory():
+    return partial(
+        SearchIndexingBufferedSender,
+        "https://example.search.windows.net",
+        "hr",
+        AzureKeyCredential("unit-test"),
+        api_version=azure_http.SEARCH_API_VERSION,
+    )
 
 
 def http_response(
@@ -239,7 +250,7 @@ class ExtractionTests(unittest.TestCase):
             native_layout(first_page + second_page, page_break=len(first_page))
         )
         self.assertEqual([page.text for page in pages], [first_page, second_page])
-        documents = build_search_documents(pages=pages, manifest_item=policy_metadata())
+        documents = build_search_documents(pages=pages, source=policy_metadata())
         semantic_text = "\n".join(document["semantic_text"] for document in documents)
         for passage in (
             "Effective from October.",
@@ -391,7 +402,7 @@ class ExtractionTests(unittest.TestCase):
                 pages = document_parser.parse_layout_result(native_layout(content))
                 self.assertEqual(pages[0].text, content)
                 documents = build_search_documents(
-                    pages=pages, manifest_item=policy_metadata()
+                    pages=pages, source=policy_metadata()
                 )
                 self.assertEqual(documents[0]["heading_text"], heading)
                 self.assertIn(
@@ -414,7 +425,7 @@ class ExtractionTests(unittest.TestCase):
         )
         pages = document_parser.parse_layout_result(native_layout(content))
         self.assertEqual(pages[0].text, content)
-        documents = build_search_documents(pages=pages, manifest_item=policy_metadata())
+        documents = build_search_documents(pages=pages, source=policy_metadata())
         raw_text = "\n".join(document["chunk_text"] for document in documents)
         semantic_text = "\n".join(document["semantic_text"] for document in documents)
         self.assertIn('<!-- PageHeader="Eligibility &amp; coverage" -->', raw_text)
@@ -432,7 +443,7 @@ class ExtractionTests(unittest.TestCase):
         sentences = [f"Condition {number} requires HR review." for number in range(120)]
         content = '<!-- PageHeader="' + " ".join(sentences) + '" -->'
         pages = document_parser.parse_layout_result(native_layout(content))
-        documents = build_search_documents(pages=pages, manifest_item=policy_metadata())
+        documents = build_search_documents(pages=pages, source=policy_metadata())
         self.assertGreater(len(documents), 1)
         semantic_text = "\n".join(document["semantic_text"] for document in documents)
         for sentence in sentences:
@@ -473,7 +484,7 @@ class ExtractionTests(unittest.TestCase):
         )
         parsed = document_parser.parse_layout_result(result)
         documents = build_search_documents(
-            pages=parsed, manifest_item=policy_metadata()
+            pages=parsed, source=policy_metadata()
         )
         table_chunks = [
             document
@@ -537,7 +548,7 @@ class ExtractionTests(unittest.TestCase):
             )
         )
         self.assertEqual([page.page_num for page in pages], [0, 1])
-        documents = build_search_documents(pages=pages, manifest_item=policy_metadata())
+        documents = build_search_documents(pages=pages, source=policy_metadata())
         table_document = next(
             document for document in documents if markup in document["chunk_text"]
         )
@@ -656,7 +667,7 @@ class ExtractionTests(unittest.TestCase):
                 Page(page_num=0, offset=0, text="An employee may request"),
                 Page(page_num=1, offset=23, text="additional leave."),
             ],
-            manifest_item=policy_metadata(),
+            source=policy_metadata(),
         )
         combined = next(
             entry for entry in documents if "additional leave" in entry["chunk_text"]
@@ -734,7 +745,7 @@ class ExtractionTests(unittest.TestCase):
         pages = [
             Page(0, 0, "## Leave\n" + "A policy sentence applies to employees. " * 500)
         ]
-        documents = build_search_documents(pages=pages, manifest_item=policy_metadata())
+        documents = build_search_documents(pages=pages, source=policy_metadata())
         self.assertGreater(len(documents), 1)
         self.assertTrue(
             all(token_count(document["semantic_text"]) <= 500 for document in documents)
@@ -752,14 +763,14 @@ class ExtractionTests(unittest.TestCase):
 
     def test_heading_and_page_changes_create_different_keys(self):
         first = build_search_documents(
-            pages=[Page(0, 0, "Policy applies.")], manifest_item=policy_metadata()
+            pages=[Page(0, 0, "Policy applies.")], source=policy_metadata()
         )
         moved = build_search_documents(
-            pages=[Page(1, 0, "Policy applies.")], manifest_item=policy_metadata()
+            pages=[Page(1, 0, "Policy applies.")], source=policy_metadata()
         )
         renamed = build_search_documents(
             pages=[Page(0, 0, "Policy applies.")],
-            manifest_item={**policy_metadata(), "name": "Renamed_Policy.pdf"},
+            source={**policy_metadata(), "name": "Renamed_Policy.pdf"},
         )
         self.assertNotEqual(first[0]["chunk_id"], moved[0]["chunk_id"])
         self.assertNotEqual(first[0]["chunk_id"], renamed[0]["chunk_id"])
@@ -796,20 +807,12 @@ class AzureContractTests(unittest.TestCase):
                 {"index": 0, "embedding": [0.3, 0.4]},
             ]
         }
-        with (
-            patch.object(
-                search_index, "AzureOpenAI", return_value=embedding_client(response)
-            ),
-            self.assertRaisesRegex(RuntimeError, "index|indices"),
-        ):
+        with self.assertRaisesRegex(RuntimeError, "index|indices"):
             search_index.embed_documents(
+                client=embedding_client(response),
                 documents=[{"semantic_text": "one"}, {"semantic_text": "two"}],
-                endpoint="https://example.openai.azure.com",
                 deployment="embedding",
                 dimensions=2,
-                credential=Mock(
-                    get_token=Mock(return_value=SimpleNamespace(token="test"))
-                ),
             )
 
     def test_missing_index_acknowledgements_are_not_success(self):
@@ -823,10 +826,8 @@ class AzureContractTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "acknowledg|response"),
         ):
             search_index.upload_documents(
-                endpoint="https://example.search.windows.net",
-                index_name="policies",
+                sender_factory=buffered_sender_factory(),
                 documents=[{"chunk_id": "one", "chunk_text": "policy"}],
-                credential=AzureKeyCredential("unit-test"),
             )
 
     def test_retry_after_http_date_is_supported(self):

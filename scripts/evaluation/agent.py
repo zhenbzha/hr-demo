@@ -1,4 +1,4 @@
-"""Collect hosted-agent answers, citations, and diagnostic metadata."""
+"""Collect hosted-agent answers, citations, and structured response items."""
 
 from __future__ import annotations
 
@@ -28,11 +28,32 @@ CITATION_FIELDS = (
 
 @dataclass(frozen=True)
 class AgentResult:
+    """
+    An Ask HR answer and its supporting source information.
+
+    ``citations`` contains source details for the answer. ``context``
+    preserves the text and source labels of the cited passages for evaluation.
+
+    Attributes
+    ----------
+    response : str
+        Employee-facing answer text.
+    references : list of dict
+        Cited passages and source details returned by Ask HR.
+    response_id : str
+        Foundry ID used to locate this response in logs and reports.
+    tool_calls : list of dict
+        Tool calls included in the response.
+    output_items : list of dict or None, default=None
+        Original Responses output items, including messages and tool results.
+        None identifies a local capture containing only answer text.
+    """
+
     response: str
     references: list[dict[str, Any]]
     response_id: str
     tool_calls: list[dict[str, Any]]
-    diagnostics: dict[str, Any] | None
+    output_items: list[dict[str, Any]] | None = None
 
     @property
     def citations(self) -> list[dict[str, Any]]:
@@ -43,21 +64,114 @@ class AgentResult:
 
     @property
     def context(self) -> str:
+        passages = [
+            reference
+            for reference in self.citations
+            if isinstance(reference.get("chunk_text"), str) and reference["chunk_text"]
+        ]
         return (
-            "\n\n".join(
-                reference["chunk_text"]
-                for reference in self.references
-                if isinstance(reference.get("chunk_text"), str)
-                and reference["chunk_text"]
-            )
-            or "No policy evidence was returned in this response."
+            json.dumps(passages, ensure_ascii=False)
+            if passages
+            else "No policy evidence was returned in this response."
         )
+
+
+def captured_response_items(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Convert recorded response items to Foundry evaluation messages.
+
+    Parameters
+    ----------
+    row : dict
+        Saved answer with ``response`` and optional original ``output_items``.
+
+    Returns
+    -------
+    list of dict
+        Messages with explicit roles and typed content. Actual Responses
+        function calls/results become ``tool_call``/``tool_result`` content,
+        preserving their names, arguments, call IDs, results, and order.
+        Text-only captures produce one assistant message containing the
+        recorded answer; missing tool calls are not reconstructed.
+
+    Raises
+    ------
+    ValueError
+        An output item has no supported message representation, or a
+        function call's arguments are not valid JSON.
+    """
+    if "output_items" in row:
+        messages = []
+        for item in row["output_items"]:
+            if item.get("type") == "function_call":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_call",
+                                "tool_call_id": item["call_id"],
+                                "name": item["name"],
+                                "arguments": json.loads(item["arguments"]),
+                            }
+                        ],
+                    }
+                )
+            elif item.get("type") == "function_call_output":
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item["call_id"],
+                        "content": [
+                            {"type": "tool_result", "tool_result": item["output"]}
+                        ],
+                    }
+                )
+            elif item.get("role") in {
+                "assistant", "developer", "system", "tool", "user",
+            }:
+                messages.append(item)
+            else:
+                raise ValueError(
+                    f"Unsupported response item for evaluation: {item.get('type')}"
+                )
+        return messages
+    return [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": row["response"]}],
+        }
+    ]
 
 
 def build_captured_agent_query(
     row: dict[str, Any], generation_instructions: str | None
 ) -> list[dict[str, Any]]:
-    """Use the recorded model conversation, without inventing missing turns."""
+    """
+    Build evaluator messages from a saved question or model conversation.
+
+    Parameters
+    ----------
+    row : dict
+        Saved evaluation row containing the question (``query``) and policy
+        text (``context``). Optional ``generation_input`` is the saved JSON
+        user message containing the question and supporting policy text.
+    generation_instructions : str or None
+        System instructions saved with the model request.
+        Required when ``row`` includes ``generation_input``.
+
+    Returns
+    -------
+    list of dict
+        Foundry messages containing the saved system and user turns when
+        available, otherwise the user question.
+
+    Raises
+    ------
+    ValueError
+        Saved inputs are invalid, required instructions are missing, or
+        the recorded question or evidence differs from the evaluation row.
+    """
     messages: list[dict[str, Any]] = []
     query = row["query"]
     generation_input = row.get("generation_input")
@@ -88,11 +202,31 @@ def build_captured_agent_query(
 
 
 def endpoint_version_status(endpoint: str, agent_name: str, version: str) -> str:
-    """Validate the Responses URL and report how its version is selected.
+    """
+    Validate the Responses URL and report how its version is selected.
 
-    Raise ValueError if the URL conflicts with the selected agent or
-    version. An unversioned URL routes to the active version, so its status
-    identifies the supplied version as an operator label.
+    Parameters
+    ----------
+    endpoint : str
+        Full HTTPS URL of the agent's Responses API.
+    agent_name : str
+        Agent name expected in the URL.
+    version : str
+        Version selected in the URL, or a label supplied for an endpoint
+        that uses the active version.
+
+    Returns
+    -------
+    str
+        ``versioned_endpoint`` when the URL selects the supplied version.
+        For active-version URLs, a status indicating that the supplied
+        version label could not be verified.
+
+    Raises
+    ------
+    ValueError
+        The URL is invalid or conflicts with the selected agent
+        or version.
     """
     url = urlsplit(endpoint)
     if (
@@ -141,24 +275,28 @@ def _tool_references(output: dict[str, Any]) -> list[dict[str, Any]]:
     return references
 
 
-def _diagnostics(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Decode optional Ask HR diagnostics, returning None when absent."""
-    metadata = payload.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        raise ValueError("Agent metadata must be an object")
-    raw = metadata.get("ask_hr_diagnostics")
-    if raw is None:
-        return None
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("ask_hr_diagnostics must contain a JSON object")
-    return parsed
-
-
 def parse_agent_response(payload: dict[str, Any]) -> AgentResult:
-    """Parse a completed response into its answer, citations, and diagnostics.
+    """
+    Parse a completed response while preserving its original output items.
 
-    Require nonempty answer text and valid evidence objects.
+    Parameters
+    ----------
+    payload : dict
+        JSON object returned by the Ask HR Responses endpoint.
+        Citation sources come from function-call output evidence.
+
+    Returns
+    -------
+    AgentResult
+        Answer, source references, response ID, tool calls, and original
+        structured output items.
+
+    Raises
+    ------
+    RuntimeError
+        The response is incomplete, errored, or has no answer.
+    ValueError
+        Response fields or evidence are malformed.
     """
     if (
         payload.get("status") != "completed"
@@ -194,9 +332,7 @@ def parse_agent_response(payload: dict[str, Any]) -> AgentResult:
     answer = "\n\n".join(text_parts).strip()
     if not answer:
         raise RuntimeError("Completed agent response contains no answer text")
-    return AgentResult(
-        answer, references, response_id, tool_calls, _diagnostics(payload)
-    )
+    return AgentResult(answer, references, response_id, tool_calls, output)
 
 
 def invoke_agent(
@@ -209,9 +345,34 @@ def invoke_agent(
     timeout: float,
     max_retry_seconds: float,
 ) -> AgentResult:
-    """Send a query to the hosted agent and return its parsed response.
+    """
+    Send a query to the hosted agent and return its parsed response.
 
-    Use the supplied credential for Foundry and delegated Search access.
+    Parameters
+    ----------
+    endpoint : str
+        Full HTTPS URL of a compatible Ask HR Responses endpoint.
+    agent_name : str
+        Agent name sent in the request's ``model`` field.
+    credential : TokenCredential
+        Entra credential used to obtain Foundry and Search tokens.
+    user_id : str
+        Represented user's Entra object ID for ``x-ms-user-identity``.
+    query : str
+        Evaluation question sent as the agent input.
+    timeout : float
+        Initial HTTP request timeout in seconds.
+    max_retry_seconds : float
+        Retry budget in seconds, measured from the first
+        attempt. Zero disables retries; retry attempts also respect the
+        remaining budget.
+
+    Returns
+    -------
+    AgentResult
+        Parsed answer, source references, response ID, and structured output.
+        The request uses ``store: false``; the caller decides how to retain
+        the collected evaluation data.
     """
     ai_token = get_bearer_token_provider(credential, "https://ai.azure.com/.default")
     search_token = get_bearer_token_provider(credential, SEARCH_SCOPE)

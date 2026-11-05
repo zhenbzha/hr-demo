@@ -10,32 +10,39 @@ evaluation, prompt-optimization loop, or deployment step.
 ## Source layout
 
 - `scripts\index_hr_documents.py`: ingestion configuration and orchestration.
-- `scripts\ingestion\manifest.py`: source metadata, paths, and hashes.
+- `scripts\json_output.py`: shared JSON output and atomic file replacement.
+- `scripts\ingestion\sources.py`: folder discovery, GUIDs, hashes, and artifact paths.
+- `scripts\ingestion\state.py`: local per-PDF hashes and ingestion progress.
 - `scripts\ingestion\document_parser.py`: Document Intelligence layout extraction,
   native table HTML, all extracted pages/sections, and original PDF coordinates.
 - `scripts\ingestion\page.py`: page, block, line, and chunk data structures.
 - `scripts\ingestion\textsplitter.py`: section-aware sentence and table chunking.
 - `scripts\ingestion\semantic.py`: normalized embedding text and Search documents.
-- `scripts\ingestion\analysis_cache.py`: optional, source- and parser-bound cache.
+- `scripts\ingestion\analysis_cache.py`: saved PDF analysis used automatically
+  when retrying processing.
 - `scripts\ingestion\search_schema.py`: Search fields and vector configuration.
-- `scripts\ingestion\search_index.py`: OpenAI/Search SDK calls, synchronization,
-  acknowledgement validation, and retrieval checks.
-- `scripts\ingestion\storage.py`: versioned PDFs, citation annotations, and the
-  published manifest.
+- `scripts\ingestion\search_index.py`: OpenAI/Search SDK calls, per-PDF updates,
+  and acknowledgement validation.
+- `scripts\ingestion\storage.py`: versioned PDFs and citation annotations.
 - `scripts\ingestion\azure_http.py`: shared API constants and the REST adapter
   used by the knowledge-configuration, retrieval-validation, and hosted-agent
   evaluation scripts. Production embeddings and index operations use SDKs.
 - `scripts\run_foundry_evaluation.py`: the manually initiated evaluation workflow.
 - `scripts\evaluation\agent.py`: hosted-agent response and citation parsing.
 - `scripts\evaluation\cases.py`: case validation and deterministic checks.
+- `scripts\evaluation\references.py`: PDF-hash verification, independent reference
+  answers, and policy-answer versus clarification/no-policy case coverage.
 - `scripts\evaluation\foundry.py`: Foundry SDK scoring and result interpretation.
 - `scripts\evaluation\runner.py`: shared dataset submission, polling, and result
   persistence for hosted-agent evaluation and the performance benchmark.
 
-For a future one-PDF handoff, the runtime source is the two entry points, both
-module directories including their `__init__.py` files, `pyproject.toml`,
-`uv.lock`, and `scripts\evaluation.env.example`. Inputs are one approved PDF, a
-manifest containing that PDF, and evaluation cases appropriate to that policy.
+For a future two-PDF handoff, the runtime source is the two entry points,
+`scripts\json_output.py`, both module directories including their `__init__.py`
+files, `pyproject.toml`, `uv.lock`, `uv.toml`, and
+`scripts\evaluation.env.example`. Inputs are one Global PDF and one local-policy
+PDF in their regional folders, plus evaluation cases and a PDF-backed reference
+file appropriate to those policies (`tests\agent-quality-references.json` is
+the full-corpus example). No ingestion source manifest is required.
 Keep this guide and the offline regression tests with the source.
 
 The existing production inputs still contain 13 PDFs and 17 agent-quality
@@ -66,6 +73,15 @@ document access, ADLS Gen2 data access, and Foundry evaluation. The Search
 service's managed identity also needs inference permission for query-time
 vectorization. No account keys or persisted access tokens are required.
 
+The entry points own credentials and SDK client lifetimes through context
+managers. DI, embedding, and storage clients are reused across the per-PDF loop.
+Processing helpers receive configured clients and do not close them; the same
+Search client is reused across file-scoped key lookups. SDK acknowledgement
+results determine whether updates succeeded; there is no visibility polling.
+Buffered writes use a configured SDK constructor to create a fresh sender for
+each upload/delete operation, keeping acknowledgement state separate. There are
+no singleton clients or dependency-injection framework.
+
 ## Ingestion configuration and source integrity
 
 Set these environment variables, or use their matching CLI options:
@@ -82,23 +98,40 @@ Set these environment variables, or use their matching CLI options:
 The deployment must serve `text-embedding-3-large`. Document embeddings and the
 Search query-time vectorizer must use the same deployment and dimensions.
 
-The manifest describes each PDF's ID, version, region, language, policy topic,
-effective/review dates, source URL, local path, active status, and SHA-256.
-`localPath` resolves from `documentRoot`, itself relative to the manifest.
-Without `documentRoot`, paths resolve from the manifest's directory.
+`--data-dir` defaults to the repository's `data` directory. Every PDF under its
+`global`, `india`, `finland`, and `hongkong` subfolders is checked, including
+nested folders and `.PDF` extensions. Only new or changed PDFs are processed;
+unchanged PDFs recorded as successfully processed are skipped. Other file types are ignored. Remove
+superseded PDFs from this directory rather than marking them inactive.
+An empty directory, unsupported regional location, unreadable directory/PDF,
+symbolic link, or junction stops ingestion before index changes. Directory links
+are rejected rather than silently skipped, which could otherwise delete the
+omitted sources' existing Search chunks during synchronization.
 
-The hash confirms that the bytes being analyzed and uploaded match the selected
-manifest. It also prevents a cached analysis from being reused for a different
-PDF. A hash is not a document-approval signature and does not replace access
-control or content governance.
+The existing corpus conventions supply language defaults: English for Global
+and India, Finnish for Finland, and Traditional Chinese for Hong Kong.
+A filename suffix `_en`, `_fi`, `_zh-HK`, or `_zh-Hant` overrides that default.
+These are input conventions, not automatic language detection. Document titles
+and topic text come from filenames; no policy dates or source URLs are invented.
+`source_uri` identifies the relative ADLS PDF path.
+
+Source IDs are standard UUID5 strings generated from
+`"ask-hr:" + relative_path.as_posix().casefold()` using the standard URL namespace.
+The same regional path keeps its ID across machines and content edits.
+Renaming or moving a PDF within the data directory changes its ID (except for
+letter-case-only changes). Duplicate case-folded identities are rejected.
+
+SHA-256 is calculated from each discovered PDF and checked again around analysis
+and before upload. This detects mid-run changes and prevents reuse of cached
+analysis for different bytes; it is not an approval signature or governance
+check. There is no manually maintained hash list or published inventory.
 
 All extracted pages and sections are retained, including first pages,
 acknowledgements, revision history, and references. Hybrid search and semantic
 ranking determine relevance; ingestion does not discard content based on its
 heading or page number. There is no exclusion configuration or review workflow.
-Legacy manifests containing `ingestion`, `excludePages`, or `excludeSections`
-are rejected with instructions to remove those settings, rather than silently
-ignoring them.
+The former `--manifest` option is removed; an old JSON manifest does not select,
+exclude, or supply metadata for any source.
 
 DI page-header, page-footer, page-number, and page-break comments remain in
 `chunk_text`. Their contents also remain in `semantic_text`, so HTML comment
@@ -117,24 +150,42 @@ configuration so the schema contains the intended query vectorizer.
 Start ingestion manually:
 
 ```powershell
-uv run --locked python scripts\index_hr_documents.py
+uv run --locked python scripts\index_hr_documents.py --data-dir .\data
 ```
 
-The sequence is:
+Configuration, local file discovery, and hash comparison happen first. If files
+and settings are unchanged, no Azure clients are created. Otherwise, read the
+index definition, choose the schema action, save unfinished PDF IDs, and apply
+the index update. Applied settings are saved only after Azure accepts the update.
 
-1. Validate configuration, manifest metadata, and source hashes.
-2. Analyze PDFs with Document Intelligence `prebuilt-layout`.
-3. Build page-aware chunks and normalized semantic text.
-4. Generate and validate embeddings.
-5. Persist versioned source PDFs and citation annotations in ADLS.
-6. Create a new Search index or update compatible existing settings.
-7. Upload current chunks, confirm visibility, then remove stale chunks.
-8. Confirm exact chunk coverage and run a hybrid retrieval smoke query.
-9. Publish the source manifest and write the local completion summary.
+Then finish **one changed PDF at a time**:
+
+1. Extract its text using the DI cache where available, and build its chunks.
+2. Generate embeddings for those chunks.
+3. Upload that PDF and its citation data to ADLS.
+4. Query only its existing Search chunk IDs using `document_id`.
+5. Upload its new chunks and require successful SDK results before deleting
+   existing IDs absent from the replacement set.
+6. Save its successful file hash, version, and chunk count; clear its unfinished
+   marker before starting the next PDF.
+
+After changed PDFs finish, delete the Search records for known removed PDFs and
+save those removals. Finally, write `ingestion-summary.json`. There are no separate
+whole-corpus extraction, embedding, or artifact-upload passes. If a later PDF
+fails, earlier completed PDFs remain saved and are skipped on retry.
+
+If every PDF is unchanged and the previous run completed, the run makes no Azure
+calls. It reads local files and writes the local schema/summary only. Changed runs
+query only the affected PDFs, selecting chunk IDs without text or vectors.
+The summary reports locally recorded counts, not a live index audit.
+Deleting a known PDF only removes its Search records; the remaining PDFs are not
+processed again.
 
 `--skip-adls-upload` is only for workflows where the matching citation artifacts
 already exist, or source links are intentionally outside the exercise.
-`--skip-validation` skips the hybrid query, not exact chunk-key verification.
+Ingestion no longer runs a sample search or whole-index verification, so
+`--skip-validation` has been removed. Run `scripts\validate_document_retrieval.py`
+or the evaluation scripts separately when retrieval testing is needed.
 
 ## Extraction, chunks, and embeddings
 
@@ -176,58 +227,156 @@ actionable error instead of truncating policy text.
 Embeddings must have the expected model identity, dimensions, unique input
 indices, and finite, nonzero vector values. The OpenAI SDK handles embedding
 requests and retries, using refreshable Entra tokens. Search uses HNSW with cosine
-similarity, with 50 vector candidates for the hybrid semantic smoke query.
+similarity.
 The knowledge source includes `chunk_vector` in `searchFields` alongside the
 text fields, so native knowledge-base retrieval can also use the configured
 query-time vectorizer rather than restricting retrieval to text fields.
 
-## Updates, artifact versions, and cache migration
+## Incremental updates and artifact versions
 
-The index belongs exclusively to this manifest. Current chunks are uploaded
-and verified before stale keys are deleted. A failed upload does not clear the
-previous index. Every per-document acknowledgement is checked, including
+The index belongs exclusively to the selected data directory. The script maintains
+`output\ingestion\ingestion-state.json` (or beneath `--output-dir`) automatically.
+Each PDF has one local record containing its last successful SHA-256 file hash,
+PDF/annotation version, and chunk count. Chunk IDs are not saved locally.
+File hashes are not stored on Search chunks or reconstructed by reading the index.
+`SavedFileRecords` is just the loaded contents of this JSON file; `FileRecord`
+describes one successfully processed PDF.
+
+The state also records the processing settings and Search/storage destinations.
+Settings are compared separately from the PDF's content hash. New or changed PDFs
+are selected using these local records before creating any Azure clients.
+There is no manually maintained source inventory.
+
+Changes to parser settings or the upload destination also cause processing.
+Added index fields trigger document backfill without deleting the index.
+Semantic-ranking and `retrievable` changes update the schema without reprocessing
+unchanged PDFs. When changing chunking or indexed document content in code,
+increment `INGESTION_VERSION` in `scripts\index_hr_documents.py`.
+
+The first run without a local state file processes all current PDFs. Missing,
+invalid, or incompatible state is rebuilt from those files. Moving the data directory
+does not change file identity; moving `--output-dir` without its state file starts
+a new processing history. Keep one output directory per ingestion target.
+
+Before any Search writes, including index deletion, the script atomically saves
+`pending_document_ids`.
+This is a list of unfinished PDF IDs, not a journal of chunk operations.
+Previous successful file records remain available for ordinary updates. A new
+or rebuilt index clears those successful records and marks the entire current
+corpus for processing; unfinished/removed IDs remain available for retry cleanup.
+After a PDF's upload and
+cleanup succeed, its file record is saved and its ID is removed from that list.
+If another PDF fails later, completed PDFs do not need to be processed again.
+Pending IDs also identify PDFs reverted or removed after a failed attempt.
+State and DI analysis use the same atomic JSON-writing helper. Processing-setting
+changes retain known file IDs so deleted PDFs can still be cleaned up.
+
+Local state assumes one operator and no out-of-band index modifications.
+Preserve or back up `ingestion-state.json`: without it, the script cannot identify
+PDFs removed since the previous run. Reprocessing the current folder does not
+discover or remove unknown/legacy PDF IDs in the index. Restore the matching state
+to recover deleted-file tracking, or rebuild into a new dedicated index.
+For a disposable index only, `--recreate-index` rebuilds it from the current PDFs.
+The DI cache can stay. No full-index recovery scan is performed automatically.
+
+Changed records are uploaded and acknowledged before old records are deleted.
+Unchanged records are kept without being uploaded again. A failed upload does not
+clear the previous index. Every per-document acknowledgement is checked, including
 partial failures. The standard-library batch iterator retains the 100-document
 request bound. The Azure Search SDK handles request retries, oversized-request
 splitting, and per-action retries. Its buffered sender runs without background
 auto-flushing. Application checks still require complete
-acknowledgements and final success for every key; an SDK flush alone is not a
-success guarantee.
+acknowledgements and final success for every key. The only document reads are
+filtered, paginated key lookups for affected PDFs before their writes. Unchanged
+and unrelated PDFs are not queried. No read-back verification, exact-coverage
+comparison, or sample query runs after an update.
 
 Search updates are **not transactional**: readers can briefly see old and new
-generations together. Atomic cutover would require a separately approved
+generations together, and successful writes can take time to appear in queries.
+Allow earlier writes to become visible before evaluating or retrying an interrupted
+run; cleanup can only find keys visible to its per-PDF query.
+Atomic cutover would require a separately approved
 side-by-side index/alias design; this script does not change that architecture.
-Changing the embedding deployment or dimensions requires a new index.
-Existing immutable field settings are retained; newly added fields use the
-generated schema. An existing index without sortable/filterable chunk keys is
-rejected rather than silently recreated.
+Index updates follow Azure's schema rules rather than silently retaining old
+field definitions:
 
-`--recreate-index` explicitly deletes the index. It is for disposable indexes,
-not a serving production index, and is never an automatic fallback.
+| Change | Index action |
+| --- | --- |
+| Missing index | Create and ingest all current PDFs |
+| Add a field | Update in place and backfill current PDFs |
+| Change semantic ranking or `retrievable` | Update in place; unchanged PDFs are skipped |
+| Remove a field or change its type | Delete, recreate, and ingest all current PDFs |
+| Change immutable attributes such as `searchable`, `filterable`, `sortable`, or `facetable` | Delete, recreate, and ingest all current PDFs |
+
+Fields are compared by name with service defaults normalized. Response metadata
+and field ordering do not cause rebuilds. Previously added ingestion-tracking
+fields are removed by rebuilding when they are absent from the desired schema.
+Authentication, transport, and unrelated validation errors are propagated;
+they never trigger a delete-and-retry fallback.
+
+`--recreate-index` remains an explicit override. Automatic rebuilds are limited
+to required schema changes, and both forms are intended for this disposable
+demo index. Deletion is not atomic with re-creation: a failed rebuild may leave
+an empty index, but all PDF IDs remain marked for processing on retry. The DI
+cache is retained. No side-by-side index or deployment mechanism is introduced.
+
+Azure blocks index deletion while a Search knowledge source references it.
+For such rebuilds, back up the dependent knowledge base/source definitions,
+remove them in dependency order, and restore them after the index is recreated.
+The ingestion script does not modify those knowledge resources.
 
 Source PDFs use `documents/{documentId}/{version}.pdf`; annotations use
 `annotations/{documentId}/{version}.json`. An existing PDF must have identical
 bytes. Existing annotation JSON must have identical canonical content, although
 whitespace and property ordering may differ. Genuinely different PDF or
-annotation content requires a new manifest version; cited artifacts are not
-overwritten. In particular, a parser correction may require a version bump
-even when the PDF itself has not changed.
+annotation content must never overwrite cited artifacts. Versions are derived
+automatically from the PDF hash, filename, parser version, DI model/API, and
+string-index mode, truncated to 32 hexadecimal characters for the existing
+reference routes. PDF edits and parser-version changes therefore produce new
+artifact paths. Parser/annotation corrections must increment `PARSER_VERSION`.
+Different extraction output under an unchanged fingerprint fails explicitly;
+it is not silently allowed to replace a previously cited artifact.
 
-Extracted local content is retained only with
-`--retain-intermediate-artifacts`. Explicit cache reuse uses
-`--reuse-analysis --analysis-dir <directory>` and is bound to source ID,
-version, hash, parser/cache version, DI model/API, and string-index mode.
-Older or mismatched caches fail with instructions to reanalyze. Parser version 5
-adds inherited DI section headings to the existing version-4 cache format, which
-retains all extracted pages, page comments, native table HTML, and column-header
-metadata. Caches made with earlier parsers must be regenerated without
-`--reuse-analysis`; version-4 parser caches lack structural heading context,
-and still older caches may already have discarded content.
-Changed chunk packing changes chunk IDs and requires re-ingestion to update Search.
-Previously omitted pages also change citation annotations, requiring a new
-manifest document version if different annotations already exist in ADLS.
-Existing artifacts are never overwritten to bypass that requirement.
-Do not redistribute caches, extracted policy text, or live evaluation output
-without reviewing their contents.
+The web app still uses the same ADLS PDF and annotation paths. Its only required
+change is accepting plain GUIDs as document IDs while retaining legacy IDs.
+Deploy that validator change before indexing GUID-based documents into an index
+used by the web app. This repository change does not deploy anything.
+Old ADLS artifacts are retained so existing citations continue to work.
+The live retrieval and agent-quality cases now use the generated GUIDs.
+`tests\agent-quality-cases-legacy.json` preserves the original case file exactly
+for pre-migration evaluations and hash-bound historical replays.
+
+The script automatically saves PDF analysis under
+`output\ingestion\document-analysis` (or beneath `--output-dir`). This allows a
+failed run to reuse completed extraction. Saved results are checked against the
+PDF and parser settings; missing, outdated, or damaged results are regenerated.
+Unchanged, successfully processed PDFs do not need to read these analysis files.
+The ingestion options `--reuse-analysis`, `--analysis-dir`, and
+`--retain-intermediate-artifacts` have been removed.
+
+Saved analysis contains extracted policy text. Keep the output directory private
+and review it before sharing. Existing ADLS files are never overwritten to bypass
+an integrity failure.
+
+### Production state storage
+
+The local JSON file suits this single-operator workflow. For production workers
+on multiple or ephemeral hosts, keep ingestion state in a shared database.
+Store one file record per ingestion target and document ID, with its PDF SHA-256,
+processing version, last successful run, and completion status. Track unfinished
+work by file ID. A persistent chunk-ID inventory is not required for this
+file-scoped cleanup approach.
+
+Use database transactions for state changes and a lease or lock to serialize
+writers to each index. Mark work incomplete before Search changes, and record
+success after SDK acknowledgements. A database transaction does not
+make DI, ADLS, and Search operations one atomic transaction; retries must remain
+safe. This script assumes one writer, even though its updates are file-scoped.
+
+Normal updates already operate only on affected PDFs. A production system can run
+independent index audits or reconciliation jobs for external changes and lost
+state; these are not part of this script's ingestion loop. No database or
+infrastructure change is implemented here.
 
 ## Manual Foundry evaluation
 
@@ -254,27 +403,94 @@ judge variable to keep GPT-6.1 Sol fixed when generation uses GPT-6 Astra.
 uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py
 ```
 
-The script invokes cases sequentially, collects answers and full structured
-citation text, uploads one dataset, then runs the built-in relevance,
-groundedness, intent-resolution, and coherence evaluators followed by the
-domain-specific expected-behavior evaluator. The custom evaluator uses the
-approved preview API and supplied fictional policy, not external employment
-law, as its reference.
+The hosted evaluation uses the **PDF-reference profile**, not an intersection
+of generic relevance, intent-resolution, coherence and groundedness scores:
+
+| Scope | Checks |
+|---|---|
+| All 17 cases | Existing HR expected-behavior rubric and citation checks |
+| 13 policy-answer cases | Built-in Groundedness and Response Completeness |
+| Four cases explicitly expecting zero citations | Their existing clarification/no-policy requirements, without demanding an invented policy answer |
+
+Scope is determined from the test expectations **before grading**, never from
+whether an answer retrieved evidence or passed a metric. A missing or incomplete
+policy answer cannot escape policy-answer scoring. A clarification/no-policy
+case must still pass its HR and citation checks.
+
+`--references` defaults to `tests\agent-quality-references.json`. This file
+contains independently PDF-derived expected answers, source PDF hashes,
+physical page numbers, quotations, and the review declaration. The loader
+rejects changed PDFs, changed questions, and missing/duplicate references before
+invoking the agent. References were assistant-authored and source-checked, not
+independently adjudicated by an HR expert; review them before using this suite
+as a customer acceptance gate. Do not copy model answers into the references
+or revise references merely to make a run pass. When sharing a smaller corpus,
+curate matching cases, reference answers, and source entries.
+
+The script captures answers and citations, retains the complete evaluation
+dataset, and submits inline rows using the official SDK pattern. The uploaded
+dataset records all 17 cases; the policy-answer run receives the predeclared
+13-case subset. Groundedness receives the unchanged question, answer text and
+cited policy context, along with recorded tool definitions (empty when
+unavailable), as required by the SDK sample's inline-data mapping.
+Response Completeness receives the independent
+`ground_truth` and unchanged answer text. This follows
+[Microsoft's RAG evaluator guidance](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rag-evaluators)
+and the official
+[Groundedness](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_groundedness.py)
+and [Response Completeness](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_response_completeness.py)
+samples. No reference answer or fabricated system instruction is added to the
+employee's question.
+
+Responses `function_call` and `function_call_output` items are also retained
+in the dataset using the documented
+[role/content message schema](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluation-dataset-schema#messages-with-tool-calls),
+as shown in the
+[Azure SDK structured-response sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_intent_resolution.py).
+Their actual names, arguments, call IDs, results, and order are preserved; raw
+function items without a `role` are not valid uploaded evaluation messages.
+Grounding context preserves the cited passages' document IDs, titles, regions,
+and page boundaries. Hosted responses expose cited passages, not necessarily
+every passage supplied to generation.
+
+The following adaptations have specific HR/application requirements:
+
+| Adaptation | Reason |
+|---|---|
+| Collect responses with the existing authenticated caller | Ask HR requires represented-user and delegated Search authorization headers. The generic agent-target sample does not supply these headers. |
+| Use the HR behavior rubric, with policy-grounding and reference-completeness checks | Answers must follow the supplied fictional policies, local/Global precedence, and appropriate clarification or abstention. [Microsoft's agent-evaluation guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent) recommends an agent-specific rubric as the primary measure. |
+| Check returned citation IDs, regions, and page fields | The demo requires answers to cite the correct policy and physical pages; these are directly observable response requirements. |
+
+The HR rubric uses the approved preview API and supplied fictional policy,
+not external employment law, as its reference. The citation transport is not
+a Search tool execution record, so the sample's tool-execution evaluator is
+not added merely to score that transport.
 
 The default is a **manual diagnostic report**, not an automatic pass gate.
-Deterministic checks report `passed`, `failed`, or `unverified`. The current
-Responses adapter does not expose internal classifier decisions or retrieval
-calls. Those requirements are therefore **unverified**, not inferred from an
-answer or an empty citation list. Optional explicit diagnostics are supported,
-but this refactor does not add them to or redeploy the hosted agent.
+Citation checks return `passed` or `failed`. There are no internal classifier or
+retrieval-execution assertions, custom response-diagnostics contract, or
+Application Insights dependency. The test cases contain only answer/citation
+expectations. No agent response fields, tracing configuration, or deployment
+are changed by this evaluation script.
 
 Null, non-finite, missing, duplicate, or inconsistent evaluation scores are
 errors even when Foundry marks a run completed. These errors fail the command
 and leave a partial report. Ordinary low scores remain visible for manual
 review. `--require-behavior-pass` optionally enforces the configured
-expected-behavior threshold and rejects failed or unverified hard checks.
+expected-behavior threshold and rejects failed citation checks and applicable
+policy-answer scores. The existing HR threshold remains 4/5; the built-in
+Groundedness and Response Completeness thresholds remain their defaults (3/5).
 This gate also applies when rescoring saved responses with `--benchmark-report`;
 the completed scores remain in the report even when the gate fails.
+
+Reports include `evaluation_plan`, reference provenance, separate
+`expected_behavior` and `policy_answers` stages, and an `assessment` listing
+failed requirements for every case. The new assessment is **not comparable**
+to the historical all-generic-metrics intersection. Historical reports and
+the benchmark/reference-replay diagnostic profiles are retained unchanged;
+their generic scores must not be presented as overall HR correctness.
+When validating evaluator changes, keep positive and deliberately incorrect
+controls separate from agent results and retain their raw judge decisions.
 
 Reports are written under `.foundry\results`. The local JSONL dataset is
 temporary unless `--retain-dataset` is supplied. The dataset uploaded to
@@ -298,6 +514,7 @@ then record that review in the manifest before scoring:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_foundry_evaluation.py `
+  --cases tests\agent-quality-cases-legacy.json `
   --replay-cases tests\agent-evaluator-reference-cases-v2.json `
   --prepare-replay `
   --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
@@ -328,7 +545,15 @@ The replay uses the documented native Foundry contracts:
 - Task Adherence (**preview**) receives that captured generation turn and uses
   a binary score. Zero is a valid failed judgment, not an execution error.
 - The existing expected-behavior evaluator is retrieved by its recorded version
-  and checked against the unchanged local rubric, not silently rewritten.
+  and checked against the rubric hash in the original captures, not silently
+  replaced by a newer local rubric.
+
+Structured response items use the same role/content conversion when available.
+Older, text-only captures are represented as a single assistant message containing
+exactly the saved answer; tool calls are not reconstructed. Historical case
+files retain their original bytes for hash verification. Retired execution
+fields are accepted only when loading these cases for reference replay and
+do not create additional checks.
 
 The user-facing clarification message is not the classifier's structured model
 response. Old captures without that full classifier turn are explicitly excluded

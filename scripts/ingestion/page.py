@@ -1,4 +1,4 @@
-"""Data types for extracted text, citation geometry, and source pages."""
+"""Represent PDF pages, extracted text, and text positions."""
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -6,9 +6,21 @@ from typing import Literal
 
 @dataclass
 class TextLine:
-    """An OCR line with a page-coordinate polygon and analysis-text span.
+    """
+    A line of extracted text and its position on a PDF page.
 
-    Span offsets and lengths use Unicode code points.
+    Attributes
+    ----------
+    text : str
+        Extracted text used to locate citations.
+    polygon : list of float
+        Alternating x/y coordinates outlining the text on the page,
+        measured in the page's ``unit``.
+    span_offset : int
+        Character offset in the complete Document Intelligence analysis
+        text, counted in Unicode code points from zero.
+    span_length : int
+        Number of Unicode code points covered by the line span.
     """
 
     text: str
@@ -19,10 +31,23 @@ class TextLine:
 
 @dataclass(frozen=True)
 class ContentBlock:
-    """A text or table fragment with zero-based source page numbers.
+    """
+    A text passage or table, with the PDF pages it came from.
 
-    heading is the Document Intelligence section path, or None when
-    structural section metadata is unavailable.
+    Attributes
+    ----------
+    text : str
+        Extracted Markdown text or native table HTML.
+    page_numbers : tuple of int
+        All contributing physical PDF pages, numbered from zero.
+    kind : {'text', 'table'}
+        Type of content, used to choose how to split it into passages.
+    table_header_rows : int or None
+        Number of column-header rows to repeat when splitting a table.
+        None means Document Intelligence did not identify header rows.
+    heading : str or None
+        Section heading, including parent sections, reported by Document
+        Intelligence. None when unavailable.
     """
 
     text: str
@@ -34,9 +59,31 @@ class ContentBlock:
 
 @dataclass
 class Page:
-    """An analyzed physical page with zero-based numbering and OCR geometry.
+    """
+    A PDF page with its extracted content and text coordinates.
 
-    The offset locates this page's text in the concatenated parsed pages.
+    Attributes
+    ----------
+    page_num : int
+        Physical PDF page index, starting at zero.
+    offset : int
+        Character offset of this page in the combined text of all
+        parsed pages.
+    text : str
+        Concatenated text of this page's parsed blocks.
+    blocks : list of ContentBlock
+        Text passages and tables in reading order. A table spanning
+        several pages appears once and records all its source pages.
+    width : float or None
+        Page width in ``unit``, or None if unavailable.
+    height : float or None
+        Page height in ``unit``, or None if unavailable.
+    unit : str or None
+        Measurement unit for page dimensions and text coordinates.
+    angle : float or None
+        Reported page orientation in degrees, or None if unavailable.
+    lines : list of TextLine
+        Text lines and their positions, used to highlight citations.
     """
 
     page_num: int
@@ -52,7 +99,20 @@ class Page:
 
 @dataclass(frozen=True)
 class Chunk:
-    """A searchable passage with all contributing zero-based page numbers."""
+    """
+    A text passage with its source pages and section heading.
+
+    Attributes
+    ----------
+    text : str
+        Extracted policy text/table HTML, including any chunk overlap.
+    page_numbers : tuple of int
+        Contributing physical PDF page indices, starting at zero.
+        Search documents and citation annotations convert these to one-based
+        page numbers for readers.
+    heading : str
+        Section heading included with the text sent to the embedding model.
+    """
 
     text: str
     page_numbers: tuple[int, ...]

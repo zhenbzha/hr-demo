@@ -1,4 +1,4 @@
-"""Store versioned PDFs, citation annotations, and manifests in ADLS Gen2."""
+"""Store PDFs and the page data used to highlight citations in ADLS Gen2."""
 
 from __future__ import annotations
 
@@ -9,49 +9,64 @@ from pathlib import Path
 from typing import Any
 
 from azure.core import MatchConditions
-from azure.core.credentials import TokenCredential
 from azure.core.exceptions import ResourceExistsError, ResourceModifiedError
 from azure.storage.filedatalake import (
     ContentSettings,
     DataLakeFileClient,
-    DataLakeServiceClient,
     FileSystemClient,
 )
 
 from .page import Page
 
 
-def annotation_payload(
-    *, manifest_item: dict[str, Any], pages: list[Page]
-) -> dict[str, Any]:
-    """Build citation annotations with one-based pages and OCR geometry.
+def _page_annotation(page: Page) -> dict[str, Any]:
+    """Prepare one PDF page's dimensions and text positions for highlighting."""
+    lines = []
+    for line in page.lines:
+        lines.append(
+            {
+                "text": line.text,
+                "polygon": line.polygon,
+                "spanOffset": line.span_offset,
+                "spanLength": line.span_length,
+            }
+        )
+    return {
+        "width": page.width,
+        "height": page.height,
+        "unit": page.unit,
+        "angle": page.angle,
+        "lines": lines,
+    }
 
-    Polygons use each page's reported unit. Span offsets refer to the
-    Document Intelligence analysis text.
+
+def annotation_payload(
+    *, source: dict[str, Any], pages: list[Page]
+) -> dict[str, Any]:
+    """
+    Prepare page sizes and text coordinates for citation highlighting.
+
+    Parameters
+    ----------
+    source : dict
+        PDF file record returned by ``discover_sources``.
+    pages : list of Page
+        Analyzed PDF pages containing text lines and their coordinates.
+
+    Returns
+    -------
+    dict
+        Document details and a ``pages`` dictionary containing page sizes,
+        orientation, text lines, and coordinates. Page keys are strings
+        starting at ``"1"``. Text offsets refer to the complete Document
+        Intelligence analysis result.
     """
     return {
-        "documentId": manifest_item["documentId"],
-        "documentTitle": Path(manifest_item["name"]).stem.replace("_", " "),
-        "version": manifest_item["version"],
-        "sha256": manifest_item["sha256"],
-        "pages": {
-            str(page.page_num + 1): {
-                "width": page.width,
-                "height": page.height,
-                "unit": page.unit,
-                "angle": page.angle,
-                "lines": [
-                    {
-                        "text": line.text,
-                        "polygon": line.polygon,
-                        "spanOffset": line.span_offset,
-                        "spanLength": line.span_length,
-                    }
-                    for line in page.lines
-                ],
-            }
-            for page in pages
-        },
+        "documentId": source["documentId"],
+        "documentTitle": Path(source["name"]).stem.replace("_", " "),
+        "version": source["version"],
+        "sha256": source["sha256"],
+        "pages": {str(page.page_num + 1): _page_annotation(page) for page in pages},
     }
 
 
@@ -71,7 +86,8 @@ def _upload_versioned_file(
     metadata: dict[str, str],
     content_type: str,
 ) -> None:
-    """Create an artifact only if absent, or verify the existing version.
+    """
+    Upload a file or verify that the existing file has the same content.
 
     Compare JSON in canonical form and other files byte for byte.
     Raise ValueError if existing content differs; keep that file unchanged.
@@ -93,7 +109,7 @@ def _upload_versioned_file(
         if existing != content:
             raise ValueError(
                 f"Stored {content_type} for {metadata['documentid']} v{metadata['version']} differs. "
-                "Use a new manifest version; existing citation artifacts will not be overwritten."
+                "Check the source and parser fingerprint; existing citation artifacts will not be overwritten."
             ) from None
 
 
@@ -137,64 +153,34 @@ def _upload_document(
 
 def upload_adls_content(
     *,
-    endpoint: str,
-    file_system_name: str,
-    credential: TokenCredential,
-    active_items: list[dict[str, Any]],
-    annotations: dict[str, dict[str, Any]],
+    file_system: FileSystemClient,
+    source: dict[str, Any],
+    annotation: dict[str, Any],
 ) -> None:
-    """Upload and verify active PDFs and their citation annotations in ADLS."""
-    with DataLakeServiceClient(account_url=endpoint, credential=credential) as service:
-        file_system = service.get_file_system_client(file_system_name)
-        with suppress(ResourceExistsError):
-            file_system.create_file_system()
-        for item in active_items:
-            _upload_document(file_system, item, annotations[item["documentId"]])
-            print(f"Verified PDF and annotations for {item['documentId']}")
-
-
-def publish_manifest(
-    *,
-    endpoint: str,
-    file_system_name: str,
-    credential: TokenCredential,
-    manifest: dict[str, Any],
-    active_items: list[dict[str, Any]],
-) -> None:
-    """Publish the source inventory to ADLS without local filesystem paths.
-
-    Overwrite the published manifest with the current inventory and
-    versioned citation paths. Call this only after verifying indexing.
     """
-    artifact_fields = {
-        item["documentId"]: {
-            key: item[key] for key in ("documentPath", "annotationPath")
-        }
-        for item in active_items
-    }
-    inventory = {
-        **{
-            key: value
-            for key, value in manifest.items()
-            if key not in {"documents", "documentRoot"}
-        },
-        "documents": [
-            {
-                **{key: value for key, value in item.items() if key != "localPath"},
-                **artifact_fields.get(item["documentId"], {}),
-            }
-            for item in manifest["documents"]
-        ],
-    }
-    with DataLakeServiceClient(account_url=endpoint, credential=credential) as service:
-        file_system = service.get_file_system_client(file_system_name)
-        _ensure_directory(file_system, "manifests")
-        file_system.get_file_client("manifests/manifest.json").upload_data(
-            json.dumps(inventory, ensure_ascii=False, indent=2, allow_nan=False).encode(
-                "utf-8"
-            ),
-            overwrite=True,
-            content_settings=ContentSettings(
-                content_type="application/json; charset=utf-8"
-            ),
-        )
+    Upload one PDF and its citation-highlighting data to Azure Data Lake Storage.
+
+    Check existing files against the supplied content. A mismatch raises an
+    error and leaves the stored file unchanged.
+
+    Parameters
+    ----------
+    file_system : FileSystemClient
+        Client for the destination filesystem, which is created if absent.
+        The caller is responsible for closing the client.
+    source : dict
+        One PDF record returned by ``discover_sources``, including the file's
+        local path and upload destinations.
+    annotation : dict
+        Citation-highlighting data returned by ``analyze_document`` for this PDF.
+
+    Raises
+    ------
+    ValueError
+        A PDF changed after analysis, or an existing file differs from
+        the content being uploaded to the same path.
+    """
+    with suppress(ResourceExistsError):
+        file_system.create_file_system()
+    _upload_document(file_system, source, annotation)
+    print(f"Verified PDF and annotations for {source['documentId']}")

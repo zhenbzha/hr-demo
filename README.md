@@ -39,11 +39,26 @@ model outputs before making Azure changes. It synchronizes the main, Activity,
 judge, and classifier model bindings to `ASK_HR_AGENT_ENV_NAME` (default
 `ask-hr-dev`) in the nested `ask-hr` project, including existing environments.
 
+The demo Storage account intentionally accepts authenticated connections from
+all networks. `infra\modules\storage.bicep` sets `publicNetworkAccess: 'Enabled'`,
+`networkAcls.defaultAction: 'Allow'`, and the account tag `SecurityControl: 'Ignore'`
+on every deployment. This tag is the supported exclusion in the inherited
+MCAPSGov `StorageAccount_PublicNetwork_Modify` policy; without it, policy
+remediation can disable public networking again. Keep the exception on this
+demo account, not the resource group. Anonymous blob access and Shared Key
+access remain disabled; data access requires Microsoft Entra authorization.
+
 ## Document schema review
 
-Each document has a stable `documentId` plus normalized `region`, `language`,
-`policyTopic`, version, effective/review dates, source URI, and SHA-256 hash.
-Only manifest entries with `isActive: true` are indexed.
+Ingestion scans every PDF beneath `data\global`, `data\india`, `data\finland`,
+and `data\hongkong`, including nested folders. Use `--data-dir` to select
+another root with the same regional layout; no source manifest is needed.
+Region comes from the folder, language follows the documented folder/filename
+conventions, and titles/topics come from filenames.
+Document IDs are deterministic GUIDs derived from relative paths. Citation
+artifact versions fingerprint the PDF, filename, and parser configuration.
+There are no artificial policy dates, active flags, or original-source URLs.
+PDFs and highlighting annotations are still uploaded to ADLS before indexing.
 
 The query planner semantically classifies local regions from the user's
 natural-language question. A resolved region retrieves the local policy plus
@@ -96,7 +111,17 @@ enriched token budget. Relevance is handled by native hybrid search
 and semantic ranking, not ingestion-time content exclusions. It embeds normalized
 content while retaining source text for citations. Embedding and index operations
 use the OpenAI and Azure Search SDKs.
-Current chunks are uploaded and verified before stale chunks are removed.
+Each run compares PDF file hashes with the local
+`output\ingestion\ingestion-state.json` file. Only new, changed, or unsuccessfully
+processed PDFs are processed. A completed run with unchanged files and settings
+makes no Azure calls.
+Each changed PDF is finished before the next starts: extract and chunk its text,
+generate embeddings, upload its artifacts, update its Search records, and save
+its successful file record. Search updates read only that PDF's existing chunk
+IDs, upload new chunks, and delete obsolete ones after successful SDK results.
+Known deleted PDFs lose their Search records. File hashes are saved after each
+successful PDF update; no chunk-ID inventory is saved locally. Ingestion does not
+scan the whole index, poll for visibility, or run retrieval checks.
 
 Configure service endpoints and a dedicated index as described in
 [the production ingestion and evaluation guide](SHARING.md), then run using
@@ -106,10 +131,35 @@ the locked project dependencies:
 uv run --locked python .\scripts\index_hr_documents.py
 ```
 
-Do not use `--recreate-index` on a serving production index; it explicitly
-deletes the index. Existing source and annotation versions are not overwritten.
-See the guide for cache migration, artifact versions, and manual Foundry
+Schema changes update the index in place when Azure supports them. Adding fields
+backfills documents; semantic-ranking and `retrievable` changes do not reprocess
+unchanged PDFs. Removing fields or changing immutable attributes automatically
+rebuilds the dedicated demo index and processes all PDFs using the retained DI
+cache. `--recreate-index` remains a manual override.
+Do not use this destructive rebuild policy on a serving production index.
+Azure blocks index deletion while a knowledge source references it; back up,
+remove, and restore the dependent knowledge resources separately when rebuilding.
+Existing source and annotation versions are not overwritten.
+See the guide for incremental updates, artifact versions, and manual Foundry
 evaluation. No packaging or cloud evaluation is performed automatically.
+
+Before using GUID-based ingestion with an existing web deployment, deploy the
+citation-ID validator update; the previous validator accepts only `HR-` IDs.
+Existing PDF/annotation artifacts and legacy citation IDs remain readable.
+The live evaluation cases now expect GUIDs and check returned answers and
+citations, not internal classifier decisions or retrieval calls. Structured
+response items are preserved for Foundry scoring; no custom response diagnostics
+or Application Insights query is required. Hosted evaluation uses the existing
+HR behavior and citation checks for every case, plus Groundedness and Response
+Completeness for the 13 policy-answer cases. PDF-backed references are in
+`tests\agent-quality-references.json` (`--references`); source hashes and
+question/reference coverage are checked before invocation. The four
+clarification/no-policy cases retain their existing requirements, not automatic
+passes. References are assistant-source-checked and need customer/HR review
+before acceptance use. Old generic-metric results are retained, not relabeled
+as the new HR assessment. Use
+`--cases tests\agent-quality-cases-legacy.json` with `--replay-cases` for historical
+pre-migration captures; those original case bytes are retained unchanged.
 
 The manually run `scripts\benchmark_ask_hr_pipeline.py` combines pipeline
 latency with Foundry SDK evaluation of the same generated answers, using all

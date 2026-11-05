@@ -20,7 +20,8 @@ def clean_text(value: str) -> str:
 
 
 class SemanticTextParser(HTMLParser):
-    """Extract searchable text from Document Intelligence HTML.
+    """
+    Extract searchable text from Document Intelligence HTML.
 
     Separate table cells with pipes and retain HTML comment contents,
     including page headers and footers.
@@ -54,6 +55,21 @@ class SemanticTextParser(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
+        """
+        Flatten table structure while retaining unrecognized markup.
+
+        Block tags start new lines and cells use pipe separators. Known
+        inline formatting tags are discarded; other tags remain literal
+        text so normalization does not erase unrecognized source content.
+
+        Parameters
+        ----------
+        tag : str
+            Lowercase HTML tag name supplied by HTMLParser.
+        attrs : list of tuple
+            Parsed attributes, unused because retained tags use their
+            original source markup.
+        """
         del attrs
         if tag == "table":
             self.table_depth += 1
@@ -72,6 +88,17 @@ class SemanticTextParser(HTMLParser):
             self.parts.append(self.get_starttag_text())
 
     def handle_endtag(self, tag: str) -> None:
+        """
+        Close table context and mirror start-tag text normalization.
+
+        End block tags with newlines and cells with spaces. Discard known
+        inline formatting tags, but retain other closing tags literally.
+
+        Parameters
+        ----------
+        tag : str
+            Lowercase HTML tag name supplied by HTMLParser.
+        """
         if tag == "table":
             self.table_depth = max(0, self.table_depth - 1)
         elif tag in {"td", "th"}:
@@ -84,6 +111,7 @@ class SemanticTextParser(HTMLParser):
             self.parts.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
+        """Ignore table-layout whitespace outside cells and captions only."""
         if (
             self.table_depth
             and not self.in_cell
@@ -124,7 +152,26 @@ def build_semantic_text(
     policy_topic: str,
     chunk_text: str,
 ) -> str:
-    """Return ranking text with title, section, topic, and normalized content."""
+    """
+    Add document and section labels to the text used for search.
+
+    Parameters
+    ----------
+    document_title : str
+        Title of the PDF.
+    heading_text : str
+        Section heading, or the document title when no heading is available.
+    policy_topic : str
+        Topic text derived from the PDF filename.
+    chunk_text : str
+        Extracted Markdown text or HTML table content to normalize.
+
+    Returns
+    -------
+    str
+        Normalized passage text preceded by its document title, section
+        heading, and topic. All of this text counts toward the token limit.
+    """
     content = normalized_content(chunk_text)
     return "\n".join(
         [
@@ -137,33 +184,90 @@ def build_semantic_text(
 
 
 def content_hash(value: str) -> str:
+    """Return the SHA-256 hexadecimal digest of UTF-8 text."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _chunk_id(
+    *, document: dict[str, Any], source_sha256: str, ordinal: int
+) -> str:
+    """
+    Hash canonical record JSON with the source fingerprint and chunk ordinal.
+
+    Parameters
+    ----------
+    document : dict
+        Search record fields, including semantic text, before adding its
+        chunk ID or embedding.
+    source_sha256 : str
+        SHA-256 fingerprint of the source PDF.
+    ordinal : int
+        Zero-based passage position in the PDF.
+
+    Returns
+    -------
+    str
+        First 40 hexadecimal characters of the UTF-8 JSON content hash.
+        Sorted keys, compact separators, and unescaped Unicode keep the
+        serialized identity deterministic.
+    """
+    identity = json.dumps(
+        {"source_sha256": source_sha256, "ordinal": ordinal, **document},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return content_hash(identity)[:40]
 
 
 def base_document(
     *,
-    manifest_item: dict[str, Any],
+    source: dict[str, Any],
     ordinal: int,
     text: str,
     heading_text: str,
     pages: list[int],
 ) -> dict[str, Any]:
-    """Build a Search document with retrieval and citation metadata.
-
-    The pages argument uses one-based physical page numbers. Derive the
-    chunk ID from the source hash, ordinal, text, and metadata.
     """
-    document_title = Path(manifest_item["name"]).stem.replace("_", " ")
+    Build a Search record for a passage of PDF text.
+
+    Parameters
+    ----------
+    source : dict
+        PDF file record returned by ``discover_sources``.
+    ordinal : int
+        Position of the passage in the PDF, starting at zero.
+        Used to generate the search record's ID.
+    text : str
+        Extracted policy passage retained as ``chunk_text``.
+    heading_text : str
+        Section heading, or the document title when no heading is available.
+    pages : list of int
+        PDF page numbers containing the passage, starting at one.
+
+    Returns
+    -------
+    dict
+        Search record containing the passage, text for embedding, document
+        ID, region, and page numbers. Includes paths to the stored PDF and
+        the page data used to highlight citations.
+
+    Raises
+    ------
+    ValueError
+        Text prepared for embedding exceeds the model's token limit.
+    """
+    document_title = Path(source["name"]).stem.replace("_", " ")
     document = {
-        "document_id": manifest_item["documentId"],
+        "document_id": source["documentId"],
         "document_title": document_title,
-        "region": manifest_item["region"],
-        "language": manifest_item["language"],
-        "policy_topic": manifest_item["policyTopic"],
-        "version": manifest_item["version"],
-        "source_uri": manifest_item["sourceUrl"],
-        "document_path": manifest_item["documentPath"],
-        "annotation_path": manifest_item["annotationPath"],
+        "region": source["region"],
+        "language": source["language"],
+        "policy_topic": source["policyTopic"],
+        "version": source["version"],
+        "source_uri": source["documentPath"],
+        "document_path": source["documentPath"],
+        "annotation_path": source["annotationPath"],
         "heading_text": heading_text,
         "chunk_text": text,
         "page_start": min(pages) if pages else None,
@@ -172,39 +276,51 @@ def base_document(
     document["semantic_text"] = build_semantic_text(
         document_title=document_title,
         heading_text=heading_text,
-        policy_topic=manifest_item["policyTopic"],
+        policy_topic=source["policyTopic"],
         chunk_text=text,
     )
     if token_count(document["semantic_text"]) > EMBEDDING_TOKEN_LIMIT:
         raise ValueError("Enriched semantic text exceeds the embedding input limit")
-    identity = json.dumps(
-        {"source_sha256": manifest_item["sha256"], "ordinal": ordinal, **document},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+    document["chunk_id"] = _chunk_id(
+        document=document, source_sha256=source["sha256"], ordinal=ordinal
     )
-    document["chunk_id"] = content_hash(identity)[:40]
     return document
 
 
 def build_search_documents(
     *,
     pages: list[Page],
-    manifest_item: dict[str, Any],
+    source: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Split analyzed pages into Search documents with citation metadata.
-
-    Measure chunk budgets against the full embedding text, including
-    document and section metadata.
     """
-    title = Path(manifest_item["name"]).stem.replace("_", " ")
+    Split PDF text into passages for Azure AI Search.
+
+    Target 500 tokens per passage, including the title, heading, and topic
+    added for embedding. Table row groups that must stay together may exceed
+    this target, up to the embedding model's input limit.
+
+    Parameters
+    ----------
+    pages : list of Page
+        Analyzed pages from one PDF, in reading order.
+    source : dict
+        File record for the PDF, returned by ``discover_sources``.
+
+    Returns
+    -------
+    list of dict
+        One search record per passage. ``chunk_text`` contains the extracted
+        text; ``semantic_text`` contains the text prepared for embedding.
+        PDF page numbers for citations start at one.
+    """
+    title = Path(source["name"]).stem.replace("_", " ")
 
     def measure_input(text: str, heading: str) -> int:
         return token_count(
             build_semantic_text(
                 document_title=title,
                 heading_text=heading or title,
-                policy_topic=manifest_item["policyTopic"],
+                policy_topic=source["policyTopic"],
                 chunk_text=text,
             )
         )
@@ -220,7 +336,7 @@ def build_search_documents(
             continue
         documents.append(
             base_document(
-                manifest_item=manifest_item,
+                source=source,
                 ordinal=ordinal,
                 text=text,
                 heading_text=chunk.heading or title,

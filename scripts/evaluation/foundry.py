@@ -44,9 +44,6 @@ and avoids unsupported claims or citations to unrelated documents/regions.
 The application displays Structured Citations separately. Do not demand inline
 citations when the source fields are present there.
 
-Do not infer internal classifier decisions or whether a retrieval call ran.
-Those requirements need traces and are checked separately, not by this judge.
-
 Scores:
 5 = satisfies all observable requirements with supporting policy evidence.
 4 = satisfies the important requirements with only minor omissions.
@@ -72,6 +69,21 @@ Return JSON only:
 
 @dataclass(frozen=True)
 class EvaluationSettings:
+    """
+    Model and limits used to score agent answers.
+
+    Attributes
+    ----------
+    model_deployment : str
+        Model deployment used by the evaluators.
+    behavior_threshold : float
+        Minimum passing score on the 1-5 scale for the HR behavior evaluator.
+    poll_interval : float
+        Seconds between evaluation-run status checks.
+    timeout : float
+        Maximum polling duration in seconds for each scoring stage.
+    """
+
     model_deployment: str
     behavior_threshold: float
     poll_interval: float
@@ -79,8 +91,29 @@ class EvaluationSettings:
 
 
 def dataset_schema(
-    *, references: bool = False, agent_inputs: bool = False
+    *,
+    references: bool = False,
+    agent_inputs: bool = False,
+    policy_answers: bool = False,
 ) -> DataSourceConfigCustom:
+    """
+    Define the input schema for scoring existing answers.
+
+    Parameters
+    ----------
+    references : bool, default=False
+        Require reviewed reference answers (``ground_truth``) and saved
+        conversation messages (``agent_query``).
+    agent_inputs : bool, default=False
+        Require saved conversation messages (``agent_query``).
+    policy_answers : bool, default=False
+        Require PDF-derived reference answers without requiring model traces.
+
+    Returns
+    -------
+    DataSourceConfigCustom
+        Schema describing the fields required in each evaluation row.
+    """
     properties = {
         name: {"type": "string"}
         for name in (
@@ -95,10 +128,10 @@ def dataset_schema(
     properties.update(
         {
             name: {"type": "array", "items": {"type": "object"}}
-            for name in ("citations", "tool_calls", "tool_definitions")
+            for name in ("citations", "tool_calls", "tool_definitions", "output_items")
         }
     )
-    if references:
+    if references or policy_answers:
         properties["ground_truth"] = {"type": "string"}
     if references or agent_inputs:
         properties["agent_query"] = {"type": "array", "items": {"type": "object"}}
@@ -113,9 +146,36 @@ def dataset_schema(
     )
 
 
+def _dataset_field_mapping(fields: tuple[str, ...]) -> dict[str, str]:
+    """Map evaluator inputs to same-named fields in a dataset row."""
+    return {field: "{{item." + field + "}}" for field in fields}
+
+
 def built_in_criteria(
     model_deployment: str, *, references: bool = False, agent_inputs: bool = False
 ) -> list[TestingCriterionAzureAIEvaluator]:
+    """
+    Map answer-row fields into the Foundry built-in quality evaluators.
+
+    Parameters
+    ----------
+    model_deployment : str
+        Model deployment used to score answers.
+    references : bool, default=False
+        Add completeness scoring against reviewed reference answers.
+        Also use saved conversations for conversation-aware evaluators.
+    agent_inputs : bool, default=False
+        Use saved conversation messages for relevance, groundedness,
+        and intent-resolution scoring.
+
+    Returns
+    -------
+    list of TestingCriterionAzureAIEvaluator
+        Criteria for relevance, groundedness, intent resolution, and coherence,
+        plus completeness when ``references`` is True.
+        Agentic metrics use the captured structured response items.
+        Coherence and completeness use the employee-facing answer text.
+    """
     fields = {
         "relevance": ("query", "response"),
         "groundedness": ("query", "response", "context", "tool_definitions"),
@@ -124,32 +184,80 @@ def built_in_criteria(
     }
     if references:
         fields["response_completeness"] = ("ground_truth", "response")
+    criteria = []
+    for name, input_fields in fields.items():
+        data_mapping = _dataset_field_mapping(input_fields)
+        if name in {"relevance", "groundedness", "intent_resolution"}:
+            data_mapping["response"] = "{{item.output_items}}"
+        if (references or agent_inputs) and name in {
+            "relevance", "groundedness", "intent_resolution",
+        }:
+            data_mapping["query"] = "{{item.agent_query}}"
+        criteria.append(
+            TestingCriterionAzureAIEvaluator(
+                type="azure_ai_evaluator",
+                name=name,
+                evaluator_name=f"builtin.{name}",
+                initialization_parameters={"deployment_name": model_deployment},
+                data_mapping=data_mapping,
+            )
+        )
+    return criteria
+
+
+def policy_answer_criteria(
+    model_deployment: str,
+) -> list[TestingCriterionAzureAIEvaluator]:
+    """
+    Score policy answers against cited passages and independent references.
+
+    Parameters
+    ----------
+    model_deployment : str
+        Existing judge deployment. Built-in passing thresholds are unchanged.
+
+    Returns
+    -------
+    list of TestingCriterionAzureAIEvaluator
+        Groundedness receives the question, answer text, policy context and
+        recorded tool definitions (empty when unavailable).
+        Response Completeness receives reference answer and answer text,
+        following the Microsoft RAG evaluator samples.
+    """
     return [
         TestingCriterionAzureAIEvaluator(
             type="azure_ai_evaluator",
             name=name,
             evaluator_name=f"builtin.{name}",
             initialization_parameters={"deployment_name": model_deployment},
-            data_mapping={
-                field: "{{item."
-                + (
-                    "agent_query"
-                    if (references or agent_inputs)
-                    and field == "query"
-                    and name in {"relevance", "groundedness", "intent_resolution"}
-                    else field
-                )
-                + "}}"
-                for field in names
-            },
+            data_mapping=_dataset_field_mapping(fields),
         )
-        for name, names in fields.items()
+        for name, fields in (
+            ("groundedness", ("query", "response", "context", "tool_definitions")),
+            ("response_completeness", ("ground_truth", "response")),
+        )
     ]
 
 
 def task_adherence_criterion(
     model_deployment: str,
 ) -> TestingCriterionAzureAIEvaluator:
+    """
+    Configure scoring for whether answers follow the recorded instructions.
+
+    Requires a saved generation request for each scored case.
+
+    Parameters
+    ----------
+    model_deployment : str
+        Judge deployment used by the built-in evaluator.
+
+    Returns
+    -------
+    TestingCriterionAzureAIEvaluator
+        Evaluator configuration using the saved conversation, answer, and
+        tool definitions. Scores are 0 (fail) or 1 (pass).
+    """
     return TestingCriterionAzureAIEvaluator(
         type="azure_ai_evaluator",
         name="task_adherence",
@@ -157,13 +265,29 @@ def task_adherence_criterion(
         initialization_parameters={"deployment_name": model_deployment},
         data_mapping={
             "query": "{{item.agent_query}}",
-            "response": "{{item.response}}",
+            "response": "{{item.output_items}}",
             "tool_definitions": "{{item.tool_definitions}}",
         },
     )
 
 
 def create_behavior_evaluator(project_client: AIProjectClient) -> EvaluatorVersion:
+    """
+    Register the HR behavior evaluator in the Foundry project.
+
+    Parameters
+    ----------
+    project_client : AIProjectClient
+        Foundry project client with access to the evaluator catalog.
+        Registration uses the evaluations preview feature.
+
+    Returns
+    -------
+    EvaluatorVersion
+        Registered evaluator version containing the HR scoring instructions
+        and a 1-5 behavior score. Scoring uses the supplied fictional policies
+        as its reference.
+    """
     properties = {
         name: {"type": "string"}
         for name in ("query", "response", "expected_behavior", "context")
@@ -210,6 +334,22 @@ def create_behavior_evaluator(project_client: AIProjectClient) -> EvaluatorVersi
 def behavior_criterion(
     evaluator: EvaluatorVersion, settings: EvaluationSettings
 ) -> TestingCriterionAzureAIEvaluator:
+    """
+    Configure the HR evaluator's model, passing score, and input fields.
+
+    Parameters
+    ----------
+    evaluator : EvaluatorVersion
+        Registered evaluator version to pin for this run.
+    settings : EvaluationSettings
+        Judge deployment and minimum passing behavior score.
+
+    Returns
+    -------
+    TestingCriterionAzureAIEvaluator
+        Criterion using query, answer, expected behavior, policy context,
+        and structured citations from each submitted row.
+    """
     return TestingCriterionAzureAIEvaluator(
         type="azure_ai_evaluator",
         name="behavioral_adherence",
@@ -219,16 +359,15 @@ def behavior_criterion(
             "deployment_name": settings.model_deployment,
             "threshold": settings.behavior_threshold,
         },
-        data_mapping={
-            field: "{{item." + field + "}}"
-            for field in (
+        data_mapping=_dataset_field_mapping(
+            (
                 "query",
                 "response",
                 "expected_behavior",
                 "context",
                 "citations",
-            )
-        },
+            ),
+        ),
     )
 
 
@@ -242,6 +381,34 @@ def start_run(
     inline_rows: list[dict[str, Any]] | None = None,
     schema: DataSourceConfigCustom | None = None,
 ) -> tuple[EvalCreateResponse, RunCreateResponse]:
+    """
+    Create a remote evaluation and start scoring existing answer rows.
+
+    Parameters
+    ----------
+    client : OpenAI
+        Authenticated OpenAI client obtained from the Foundry project.
+    name : str
+        Display name for the evaluation and its run.
+    dataset_id : str or None
+        Registered Foundry dataset ID, or None for inline rows.
+    criteria : list of TestingCriterionAzureAIEvaluator
+        Evaluators and the dataset fields they read.
+    metadata : dict
+        Labels recording the agent and dataset versions.
+    inline_rows : list of dict or None, default=None
+        Prepared answer rows sent directly to the run, or None
+        when using a registered dataset. Provide exactly one input source.
+    schema : DataSourceConfigCustom or None, default=None
+        Matching custom row schema; defaults to ``dataset_schema()``.
+
+    Returns
+    -------
+    evaluation : EvalCreateResponse
+        Remote evaluation definition containing the dataset schema and criteria.
+    run : RunCreateResponse
+        Newly submitted run. Call ``wait_for_run`` before reading scores.
+    """
     if (dataset_id is None) == (inline_rows is None):
         raise ValueError("Provide exactly one dataset ID or inline dataset")
     if inline_rows is not None:
@@ -273,10 +440,32 @@ def start_run(
 def wait_for_run(
     client: OpenAI, evaluation_id: str, run: EvaluationRun, settings: EvaluationSettings
 ) -> EvaluationRun:
-    """Wait for an evaluation run to complete within the configured timeout.
+    """
+    Wait for an evaluation run to complete within the configured timeout.
 
-    On timeout, request cancellation before raising TimeoutError.
-    Raise RuntimeError for other unsuccessful terminal states.
+    Parameters
+    ----------
+    client : OpenAI
+        Foundry OpenAI client used to check status or cancel the run.
+    evaluation_id : str
+        ID of the evaluation containing this run.
+    run : EvaluationRun
+        Initial or last retrieved run object.
+    settings : EvaluationSettings
+        Poll interval and per-stage timeout, both in seconds.
+
+    Returns
+    -------
+    EvaluationRun
+        Completed run, ready for score validation with ``evaluation_summary``.
+
+    Raises
+    ------
+    TimeoutError
+        Polling exceeds the configured timeout; cancellation
+        is requested before raising.
+    RuntimeError
+        The run reaches an unsuccessful terminal state.
     """
     deadline = time.monotonic() + settings.timeout
     while run.status not in TERMINAL_STATUSES:
@@ -416,10 +605,31 @@ def evaluation_summary(
     criterion_names: set[str],
     threshold: float | None = None,
 ) -> dict[str, Any]:
-    """Summarize case scores and report incomplete or inconsistent results.
+    """
+    Summarize case scores and report incomplete or inconsistent results.
 
-    Include validation_errors for missing cases, invalid scores, or
-    inconsistent aggregate counts.
+    Parameters
+    ----------
+    evaluation : EvalCreateResponse or EvalRetrieveResponse
+        Remote evaluation definition identifying the parent run.
+    run : EvaluationRun
+        Completed scoring run with aggregate counts and report URL.
+    items : list of OutputItemListResponse
+        All output items collected across the run's result pages.
+    expected_case_ids : set of str
+        Exact set of case IDs submitted to this stage.
+    criterion_names : set of str
+        Exact evaluator names expected for each case.
+    threshold : float or None, default=None
+        Minimum HR behavior score used to check reported pass/fail results.
+        Leave unset for the built-in evaluators.
+
+    Returns
+    -------
+    dict
+        Run details, report URL, counts, and per-case scores and explanations.
+        ``validation_errors`` lists missing, duplicate, malformed, or
+        inconsistent results. Check this field before using the scores.
     """
     errors = []
     cases = []

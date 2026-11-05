@@ -94,8 +94,6 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
         pipeline = pipeline_fixture(status="clarify")
         case = case_fixture(
             expectedDocumentIds=[],
-            expectedRegionClassification={"regions": [], "status": "clarify"},
-            expectedRetrieval=False,
             expectedCitationCount=0,
         )
         result = await benchmark.run_case(

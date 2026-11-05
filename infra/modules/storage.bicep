@@ -36,6 +36,8 @@ module storage 'br/public:avm/res/storage/storage-account:0.33.1' = {
     publicNetworkAccess: 'Enabled'
     requireInfrastructureEncryption: true
     skuName: 'Standard_LRS'
+    // Demo-only opt-out supported by MCAPSGov StorageAccount_PublicNetwork_Modify.
+    // Keep this account-scoped; a resource-group tag would exempt other resources.
     tags: union(tags, {
       SecurityControl: 'Ignore'
     })

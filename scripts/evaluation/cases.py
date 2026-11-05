@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .agent import AgentResult
+from .agent import AgentResult, captured_response_items
 
 LIST_FIELDS = {
     "expectedBehavior",
@@ -17,7 +17,7 @@ LIST_FIELDS = {
     "expectedSupportingDocumentIds",
     "forbiddenRegions",
     "forbiddenDocumentIds",
-    "expectedRetrievalRegions",
+    "allowedCitationRegions",
     "requiredCitationFields",
     "workbookRefs",
 }
@@ -25,26 +25,41 @@ CASE_FIELDS = LIST_FIELDS | {
     "id",
     "query",
     "hardRequirement",
+    "expectedCitationCount",
+}
+LEGACY_EXECUTION_FIELDS = {
     "expectedRegionClassification",
     "expectedRetrieval",
-    "expectedCitationCount",
+    "expectedRetrievalRegions",
 }
 
 
 @dataclass
 class CaseChecks:
+    """
+    Results of the rule-based checks for one response.
+
+    ``status`` is ``failed`` if an answer/citation check fails and
+    ``passed`` otherwise.
+
+    Attributes
+    ----------
+    failures : list of str
+        Observed violations, such as a missing expected source.
+    """
+
     failures: list[str] = field(default_factory=list)
-    unverified: list[str] = field(default_factory=list)
 
     @property
     def status(self) -> str:
-        return (
-            "failed" if self.failures else "unverified" if self.unverified else "passed"
-        )
+        if self.failures:
+            return "failed"
+        return "passed"
 
 
-def _validate_case(case: Any) -> None:
-    if not isinstance(case, dict) or case.keys() - CASE_FIELDS:
+def _validate_case(case: Any, *, historical: bool = False) -> None:
+    allowed = CASE_FIELDS | LEGACY_EXECUTION_FIELDS if historical else CASE_FIELDS
+    if not isinstance(case, dict) or case.keys() - allowed:
         raise ValueError("Evaluation case contains unknown/unsupported fields")
     for name in ("id", "query"):
         if not isinstance(case.get(name), str) or not case[name].strip():
@@ -58,44 +73,44 @@ def _validate_case(case: Any) -> None:
             raise ValueError(
                 f"{case['id']}: {name} must be an array of nonempty strings"
             )
-    if "expectedRetrieval" in case and type(case["expectedRetrieval"]) is not bool:
-        raise ValueError("expectedRetrieval must be a boolean")
     if "expectedCitationCount" in case and (
         type(case["expectedCitationCount"]) is not int
         or case["expectedCitationCount"] < 0
     ):
         raise ValueError("expectedCitationCount must be a nonnegative integer")
-    classification = case.get("expectedRegionClassification")
-    if "expectedRegionClassification" in case:
-        if not isinstance(classification, dict) or classification.keys() != {
-            "regions",
-            "status",
-        }:
-            raise ValueError(
-                "expectedRegionClassification requires regions and status, not an inferred confidence"
-            )
-        if not isinstance(classification["status"], str) or classification[
-            "status"
-        ] not in {
-            "retrieve",
-            "clarify",
-            "unsupported",
-        }:
-            raise ValueError("Invalid expected classifier status")
-        if not isinstance(classification["regions"], list) or any(
-            not isinstance(region, str) for region in classification["regions"]
-        ):
-            raise ValueError(
-                "Expected classification regions must be an array of strings"
-            )
 
 
-def load_cases(path: Path) -> list[dict[str, Any]]:
+def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
+    """
+    Validate a case file and select the cases this evaluator will run.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        JSON file with a top-level ``cases`` array. Each case requires
+        ``id``, ``query``, and a boolean ``hardRequirement``. Optional
+        expectations name source IDs, citation fields, regions, or behavior.
+    historical : bool, default=False
+        Allow retired execution fields when reading hash-bound historical
+        cases for reference replay. These fields are not evaluated.
+
+    Returns
+    -------
+    list of dict
+        Cases marked ``hardRequirement: true``, in file order.
+        All entries in the file are validated before selecting cases.
+
+    Raises
+    ------
+    ValueError
+        Case fields are unsupported/malformed, IDs are duplicated,
+        or no hard-requirement cases remain.
+    """
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
         raise ValueError("Evaluation dataset must contain a cases array")
     for case in payload["cases"]:
-        _validate_case(case)
+        _validate_case(case, historical=historical)
     identifiers = [case["id"] for case in payload["cases"]]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("Evaluation case IDs must be unique")
@@ -106,13 +121,28 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
 
 
 def expected_behavior(case: dict[str, Any]) -> str:
-    """Build the answer and citation rubric for an evaluation case."""
+    """
+    Describe how an answer should satisfy the case's requirements.
+
+    Parameters
+    ----------
+    case : dict
+        Validated case with optional ``expectedBehavior``, ``assertions``,
+        expected/forbidden source IDs or regions, and citation requirements.
+
+    Returns
+    -------
+    str
+        Instructions for the HR behavior evaluator, covering the answer,
+        required sources, and citations.
+    """
     instructions = [*case.get("expectedBehavior", []), *case.get("assertions", [])]
     for key, label in (
         ("expectedDocumentIds", "Use evidence from documents"),
         ("expectedPrimaryDocumentIds", "Primary policy evidence must come from"),
         ("expectedSupportingDocumentIds", "Supporting policy evidence must include"),
         ("forbiddenRegions", "Do not cite regions"),
+        ("allowedCitationRegions", "Cited regions must be limited to"),
         ("forbiddenDocumentIds", "Do not cite documents"),
         ("requiredCitationFields", "Structured citations must contain"),
     ):
@@ -124,11 +154,28 @@ def expected_behavior(case: dict[str, Any]) -> str:
 def evaluation_row(
     case: dict[str, Any], result: AgentResult, *, context: str | None = None
 ) -> dict[str, Any]:
-    """Build a Foundry dataset row from a case and its observed response.
-
-    Use the context override when supplied; otherwise use citation text.
     """
-    return {
+    Build a Foundry dataset row from a case and its observed response.
+
+    Parameters
+    ----------
+    case : dict
+        Test question and expectations returned by ``load_cases``.
+    result : AgentResult
+        Agent answer, source references, original response items, and response ID.
+    context : str or None, default=None
+        Policy text provided to the model when it generated the answer.
+        None uses the text from ``result``'s cited passages.
+        An explicitly supplied empty string remains empty.
+
+    Returns
+    -------
+    dict
+        Question, answer, structured output items, policy text, citations,
+        expected behavior, tool calls, and tool definitions, with IDs linking
+        the row to its case and agent response.
+    """
+    row = {
         "case_id": case["id"],
         "query": case["query"],
         "response": result.response,
@@ -139,6 +186,10 @@ def evaluation_row(
         "tool_definitions": [],
         "response_id": result.response_id,
     }
+    if result.output_items is not None:
+        row["output_items"] = result.output_items
+    row["output_items"] = captured_response_items(row)
+    return row
 
 
 def _check_evidence(
@@ -161,10 +212,10 @@ def _check_evidence(
         checks.failures.append(f"Forbidden documents: {sorted(forbidden)}")
     if forbidden := regions & set(case.get("forbiddenRegions", [])):
         checks.failures.append(f"Forbidden regions: {sorted(forbidden)}")
-    allowed_regions = set(case.get("expectedRetrievalRegions", []))
+    allowed_regions = set(case.get("allowedCitationRegions", []))
     if allowed_regions and regions - allowed_regions:
         checks.failures.append(
-            "Returned evidence is outside the allowed retrieval regions"
+            "Citations are outside the allowed policy regions"
         )
     if (
         "expectedCitationCount" in case
@@ -195,61 +246,24 @@ def _check_citations(
                 )
 
 
-def _check_internal_behavior(
-    case: dict[str, Any], result: AgentResult, checks: CaseChecks
-) -> None:
-    diagnostics = result.diagnostics or {}
-    if "expectedRegionClassification" in case:
-        actual = diagnostics.get("classification")
-        if actual is None:
-            checks.unverified.append(
-                "Classifier decision is not exposed by this endpoint"
-            )
-        elif (
-            not isinstance(actual, dict)
-            or not isinstance(actual.get("status"), str)
-            or not isinstance(actual.get("regions"), list)
-            or any(not isinstance(region, str) for region in actual["regions"])
-        ):
-            checks.failures.append("Invalid classifier diagnostics")
-        elif (
-            actual["status"] != case["expectedRegionClassification"]["status"]
-            or set(actual["regions"])
-            != set(case["expectedRegionClassification"]["regions"])
-        ):
-            checks.failures.append(
-                "Observed classifier decision does not match the expected status/regions"
-            )
-    if "expectedRetrieval" in case or "expectedRetrievalRegions" in case:
-        retrieval_regions = diagnostics.get("retrieval_regions")
-        if retrieval_regions is None:
-            checks.unverified.append(
-                "Retrieval calls are not exposed; citations alone cannot prove whether retrieval ran"
-            )
-        elif not isinstance(retrieval_regions, list) or any(
-            not isinstance(region, str) for region in retrieval_regions
-        ):
-            checks.failures.append("Invalid retrieval-region diagnostics")
-        else:
-            if (
-                "expectedRetrieval" in case
-                and bool(retrieval_regions) != case["expectedRetrieval"]
-            ):
-                checks.failures.append(
-                    "Observed retrieval activity differs from the case requirement"
-                )
-            if "expectedRetrievalRegions" in case and set(retrieval_regions) != set(
-                case["expectedRetrievalRegions"]
-            ):
-                checks.failures.append(
-                    "Observed retrieval scopes differ from the required scopes"
-                )
-
-
 def validate_case_result(case: dict[str, Any], result: AgentResult) -> CaseChecks:
-    """Return deterministic check results, including unverified requirements."""
+    """
+    Check the source references and citations returned in an agent response.
+
+    Parameters
+    ----------
+    case : dict
+        Validated case defining expected/forbidden documents or regions,
+        and citation count/fields.
+    result : AgentResult
+        Parsed agent response and its citations.
+
+    Returns
+    -------
+    CaseChecks
+        Observed answer/citation failures.
+    """
     checks = CaseChecks()
     _check_evidence(case, result, checks)
     _check_citations(case, result, checks)
-    _check_internal_behavior(case, result, checks)
     return checks

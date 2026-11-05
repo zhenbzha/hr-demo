@@ -14,6 +14,7 @@ import run_foundry_evaluation as runner
 from azure.core.exceptions import ResourceExistsError
 from evaluation import agent, cases, foundry
 from evaluation import runner as scoring
+from evaluation.references import load_policy_references, policy_dataset_rows
 from openai.types import EvalCreateResponse
 from openai.types.evals import RunCreateResponse
 from openai.types.evals.run_create_response import ResultCounts
@@ -31,6 +32,7 @@ def response_payload(*, output: list | None = None, **overrides) -> dict:
         else [
             {
                 "type": "message",
+                "role": "assistant",
                 "content": [{"type": "output_text", "text": "Policy answer."}],
             }
         ],
@@ -45,7 +47,6 @@ def agent_result(**overrides) -> agent.AgentResult:
             "references": [],
             "response_id": "response-test",
             "tool_calls": [],
-            "diagnostics": None,
             **overrides,
         }
     )
@@ -86,6 +87,44 @@ def completed_run(identifier: str = "run-test", **counts):
     )
 
 
+def policy_reference_fixture(root: Path, case_rows: list[dict]) -> Path:
+    pdf = root / "policy.pdf"
+    pdf.write_bytes(b"Policy answer.")
+    path = root / "references.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "review": {
+                    "status": "assistant_source_checked",
+                    "basis": "Synthetic source fixture, not human approval.",
+                },
+                "sources": [
+                    {
+                        "document_id": "policy",
+                        "path": pdf.name,
+                        "sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                    }
+                ],
+                "references": [
+                    {
+                        "case_id": case["id"],
+                        "query": case["query"],
+                        "ground_truth": "Policy answer.",
+                        "passages": [
+                            {"document_id": "policy", "page": 1, "quote": "Policy answer."}
+                        ],
+                    }
+                    for case in case_rows
+                    if case.get("expectedCitationCount") != 0
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 class ResponseCollectionTests(unittest.TestCase):
     def test_partial_response_is_not_success_even_with_answer_text(self):
         for status in ("incomplete", "failed", "in_progress"):
@@ -122,14 +161,88 @@ class ResponseCollectionTests(unittest.TestCase):
         )
         result = agent.parse_agent_response(payload)
         self.assertEqual(result.citations[0]["chunk_text"], source["chunk_text"])
-        self.assertEqual(result.context, source["chunk_text"])
+        self.assertEqual(json.loads(result.context), [source])
+        self.assertEqual(result.output_items, payload["output"])
 
     def test_missing_evidence_does_not_claim_no_retrieval_call(self):
         result = agent.parse_agent_response(response_payload())
         self.assertEqual(
             result.context, "No policy evidence was returned in this response."
         )
-        self.assertIsNone(result.diagnostics)
+
+    def test_collection_normalizes_real_tool_items_without_reading_diagnostics(self):
+        payload = response_payload(
+            metadata={"ask_hr_diagnostics": "not part of the evaluation contract"}
+        )
+        payload["output"].extend(
+            [
+                {
+                    "type": "function_call",
+                    "name": "ask_hr_citations",
+                    "call_id": "c1",
+                    "arguments": '{"citation_ids":["one"]}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": '{"evidence":[]}',
+                },
+            ]
+        )
+        result = agent.parse_agent_response(payload)
+        row = cases.evaluation_row({"id": "test", "query": "Policy?"}, result)
+        self.assertEqual(result.output_items, payload["output"])
+        self.assertEqual(
+            row["output_items"],
+            [
+                payload["output"][0],
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_call",
+                            "tool_call_id": "c1",
+                            "name": "ask_hr_citations",
+                            "arguments": {"citation_ids": ["one"]},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "content": [
+                        {"type": "tool_result", "tool_result": '{"evidence":[]}'}
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(agent.captured_response_items(row), row["output_items"])
+        self.assertEqual(row["response"], "Policy answer.")
+
+    def test_unsupported_response_items_are_not_silently_discarded(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported response item"):
+            agent.captured_response_items(
+                {"output_items": [{"type": "unknown_item"}]}
+            )
+
+    def test_policy_context_keeps_local_and_global_source_boundaries(self):
+        references = [
+            {
+                "document_id": "india",
+                "document_title": "India policy",
+                "region": "india",
+                "chunk_text": "Local policy text.",
+            },
+            {
+                "document_id": "global",
+                "document_title": "Global handbook",
+                "region": "global",
+                "chunk_text": "Responsible AI rules.",
+            },
+        ]
+        self.assertEqual(
+            json.loads(agent_result(references=references).context), references
+        )
 
     def test_endpoint_rejects_a_different_agent_or_version(self):
         endpoint = "https://example.services.ai.azure.com/api/projects/project/agents/ask-hr/versions/3/protocols/openai/responses"
@@ -175,6 +288,14 @@ class ResponseCollectionTests(unittest.TestCase):
             request.call_args.kwargs["headers"]()["Authorization"],
             "Bearer " + "ai-test",
         )
+        self.assertEqual(
+            request.call_args.kwargs["headers"]()["x-client-search-authorization"],
+            "search-test",
+        )
+        self.assertEqual(
+            request.call_args.kwargs["headers"]()["x-ms-user-identity"],
+            "test-user",
+        )
         self.assertEqual(request.call_args.kwargs["max_retry_seconds"], 0)
 
 
@@ -190,75 +311,51 @@ class CaseValidationTests(unittest.TestCase):
                 }
             )
 
-    def test_missing_internal_trace_is_reported_as_unverified(self):
+    def test_response_checks_do_not_require_internal_diagnostics(self):
         checks = cases.validate_case_result(
-            {
-                "expectedRegionClassification": {"status": "clarify", "regions": []},
-                "expectedRetrieval": False,
-            },
-            agent_result(),
-        )
-        self.assertEqual(checks.status, "unverified")
-        self.assertEqual(len(checks.unverified), 2)
-
-    def test_empty_evidence_does_not_prove_retrieval_was_skipped(self):
-        result = agent_result(diagnostics={"retrieval_regions": ["finland", "global"]})
-        checks = cases.validate_case_result({"expectedRetrieval": False}, result)
-        self.assertEqual(checks.status, "failed")
-
-    def test_classification_region_order_does_not_change_the_result(self):
-        expected = {"status": "retrieve", "regions": ["finland", "hongkong"]}
-        checks = cases.validate_case_result(
-            {"expectedRegionClassification": expected},
-            agent_result(
-                diagnostics={
-                    "classification": {
-                        "status": "retrieve",
-                        "regions": ["hongkong", "finland"],
-                    }
-                }
-            ),
+            {"expectedCitationCount": 0},
+            agent.parse_agent_response(response_payload()),
         )
         self.assertEqual(checks.status, "passed")
+        self.assertEqual(vars(checks), {"failures": []})
 
-    def test_classification_still_rejects_wrong_status_or_region_sets(self):
-        for actual in (
-            {"status": "clarify", "regions": ["finland", "hongkong"]},
-            {"status": "retrieve", "regions": ["finland"]},
-            {"status": "retrieve", "regions": ["finland", "hongkong", "india"]},
+    def test_retired_execution_requirements_are_rejected_for_new_evaluations(self):
+        for field in (
+            "expectedRegionClassification",
+            "expectedRetrieval",
+            "expectedRetrievalRegions",
         ):
-            with self.subTest(actual=actual):
-                checks = cases.validate_case_result(
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ValueError, "unsupported"),
+            ):
+                cases._validate_case(
                     {
-                        "expectedRegionClassification": {
-                            "status": "retrieve",
-                            "regions": ["finland", "hongkong"],
-                        }
-                    },
-                    agent_result(diagnostics={"classification": actual}),
+                        "id": "test",
+                        "query": "Policy?",
+                        "hardRequirement": True,
+                        field: [],
+                    }
                 )
-                self.assertEqual(checks.status, "failed")
 
-    def test_invalid_classification_diagnostics_are_reported(self):
-        for actual in (
-            "retrieve",
-            {},
-            {"status": "retrieve", "regions": "finland"},
-            {"status": "retrieve", "regions": [["finland"]]},
-            {"status": [], "regions": ["finland"]},
+    def test_allowed_regions_check_citations_not_internal_requests(self):
+        for region, expected in (
+            ("finland", "passed"),
+            ("global", "passed"),
+            ("india", "failed"),
         ):
-            with self.subTest(actual=actual):
+            with self.subTest(region=region):
                 checks = cases.validate_case_result(
-                    {
-                        "expectedRegionClassification": {
-                            "status": "retrieve",
-                            "regions": ["finland"],
-                        }
-                    },
-                    agent_result(diagnostics={"classification": actual}),
+                    {"allowedCitationRegions": ["finland", "global"]},
+                    agent_result(references=[{"region": region}]),
                 )
-                self.assertEqual(checks.status, "failed")
-                self.assertIn("Invalid classifier diagnostics", checks.failures)
+                self.assertEqual(checks.status, expected)
+
+    def test_original_cases_can_still_be_loaded_for_historical_replay(self):
+        path = Path(__file__).resolve().parent / "agent-quality-cases-legacy.json"
+        loaded = cases.load_cases(path, historical=True)
+        self.assertEqual(len(loaded), 17)
+        self.assertIn("expectedRegionClassification", loaded[0])
 
     def test_rich_citation_requirement_rejects_empty_list(self):
         checks = cases.validate_case_result(
@@ -377,6 +474,195 @@ class FoundryResultTests(unittest.TestCase):
         client.evals.runs.cancel.assert_called_once()
 
 
+class PolicyReferenceTests(unittest.TestCase):
+    def setUp(self):
+        self.cases = [
+            {"id": "answer", "query": "Policy?", "hardRequirement": True},
+            {
+                "id": "clarify",
+                "query": "Which entitlement?",
+                "hardRequirement": True,
+                "expectedCitationCount": 0,
+                "expectedBehavior": ["Ask which region applies."],
+            },
+        ]
+
+    def test_reference_scope_and_answer_preservation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = policy_reference_fixture(Path(temporary), self.cases)
+            references = load_policy_references(path, self.cases)
+            rows = [
+                cases.evaluation_row(case, agent_result()) for case in self.cases
+            ]
+            original = json.dumps(rows, sort_keys=True)
+            prepared = policy_dataset_rows(rows, references)
+            self.assertEqual(prepared[0]["ground_truth"], "Policy answer.")
+            self.assertEqual(prepared[1]["ground_truth"], "")
+            self.assertEqual(references.answers.keys(), {"answer"})
+            self.assertEqual(json.dumps(rows, sort_keys=True), original)
+            for before, after in zip(rows, prepared, strict=True):
+                self.assertEqual(
+                    before, {key: value for key, value in after.items() if key != "ground_truth"}
+                )
+            with self.assertRaisesRegex(ValueError, "uniquely cover"):
+                policy_dataset_rows(rows[:1], references)
+            rows[0]["query"] = "Changed question"
+            with self.assertRaisesRegex(ValueError, "requirements changed"):
+                policy_dataset_rows(rows, references)
+
+    def test_missing_stale_or_repurposed_references_fail_before_scoring(self):
+        for mutation in ("pdf", "question", "missing", "duplicate", "control"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                path = policy_reference_fixture(root, self.cases)
+                manifest = json.loads(path.read_text())
+                if mutation == "pdf":
+                    (root / "policy.pdf").write_bytes(b"Changed policy.")
+                elif mutation == "question":
+                    manifest["references"][0]["query"] = "Different question"
+                elif mutation == "missing":
+                    manifest["references"] = []
+                elif mutation == "duplicate":
+                    manifest["references"].append(manifest["references"][0])
+                else:
+                    manifest["references"][0]["case_id"] = "clarify"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    load_policy_references(path, self.cases)
+
+    def test_policy_mappings_use_real_context_and_independent_reference(self):
+        criteria = {
+            item["name"]: item for item in foundry.policy_answer_criteria("judge")
+        }
+        self.assertEqual(set(criteria), {"groundedness", "response_completeness"})
+        self.assertEqual(
+            criteria["groundedness"]["data_mapping"],
+            {
+                "query": "{{item.query}}",
+                "response": "{{item.response}}",
+                "context": "{{item.context}}",
+                "tool_definitions": "{{item.tool_definitions}}",
+            },
+        )
+        self.assertEqual(
+            criteria["response_completeness"]["data_mapping"],
+            {"ground_truth": "{{item.ground_truth}}", "response": "{{item.response}}"},
+        )
+        self.assertNotIn(
+            "agent_query", foundry.dataset_schema(policy_answers=True)["item_schema"]["required"]
+        )
+
+    def test_clarification_is_not_auto_passed_and_incomplete_policy_answers_fail(self):
+        summary = {
+            "evaluation_plan": {
+                "behavior_case_ids": ["answer", "clarify"],
+                "policy_answer_case_ids": ["answer"],
+            },
+            "case_checks": [
+                {"case_id": case["id"], "status": "passed"} for case in self.cases
+            ],
+            "expected_behavior": {
+                "cases": [
+                    {
+                        "case_id": case["id"],
+                        "results": [
+                            {
+                                "name": "behavioral_adherence",
+                                "passed": case["id"] == "answer",
+                            }
+                        ],
+                    }
+                    for case in self.cases
+                ]
+            },
+            "policy_answers": {
+                "cases": [
+                    {
+                        "case_id": "answer",
+                        "results": [
+                            {"name": "groundedness", "passed": True},
+                            {"name": "response_completeness", "passed": False},
+                        ],
+                    }
+                ]
+            },
+        }
+        assessment = scoring.policy_assessment(summary)
+        self.assertEqual(assessment["failed"], 2)
+        self.assertEqual(
+            assessment["cases"][0]["failed_requirements"], ["response_completeness"]
+        )
+        self.assertEqual(
+            assessment["cases"][1]["failed_requirements"], ["behavioral_adherence"]
+        )
+        summary["policy_answers"]["cases"] = []
+        with self.assertRaisesRegex(ValueError, "missing or duplicate"):
+            scoring.policy_assessment(summary)
+
+    def test_policy_stage_scope_does_not_depend_on_response_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            references = load_policy_references(
+                policy_reference_fixture(root, self.cases), self.cases
+            )
+            rows = policy_dataset_rows(
+                [
+                    cases.evaluation_row(case, agent_result(response="No policy available."))
+                    for case in self.cases
+                ],
+                references,
+            )
+            path = root / "responses.jsonl"
+            runner._write_dataset_rows(path, rows)
+            summary = {
+                "dataset_version": "test-version",
+                "agent": {"name": "ask-hr", "version": "test"},
+                "case_checks": [
+                    {"case_id": case["id"], "status": "passed"} for case in self.cases
+                ],
+            }
+            project = MagicMock()
+            project.__enter__.return_value = project
+            project.datasets.upload_file.return_value = SimpleNamespace(id="dataset")
+            project.evaluators.create_version.return_value = SimpleNamespace(
+                name="behavior", version="1"
+            )
+
+            def record_stage(**kwargs):
+                summary[kwargs["label"]] = {
+                    "cases": [
+                        {
+                            "case_id": identifier,
+                            "results": [
+                                {"name": criterion["name"], "passed": False}
+                                for criterion in kwargs["criteria"]
+                            ],
+                        }
+                        for identifier in sorted(kwargs["case_ids"])
+                    ]
+                }
+
+            with (
+                patch.object(scoring, "AIProjectClient", return_value=project),
+                patch.object(scoring, "run_stage", side_effect=record_stage) as stage,
+            ):
+                scoring.score_dataset(
+                    project_endpoint="https://example.test",
+                    dataset_name="answers",
+                    evaluation_name="quality",
+                    settings=foundry.EvaluationSettings("judge", 4, 1, 60),
+                    credential=Mock(),
+                    dataset_path=path,
+                    summary=summary,
+                    summary_path=root / "report.json",
+                    case_ids={"answer", "clarify"},
+                    policy_case_ids=set(references.answers),
+                )
+            self.assertEqual(stage.call_args_list[0].kwargs["case_ids"], {"answer", "clarify"})
+            self.assertEqual(stage.call_args_list[1].kwargs["case_ids"], {"answer"})
+            self.assertEqual(summary["assessment"]["failed"], 2)
+
+
 class ManualRunnerTests(unittest.TestCase):
     def test_judge_deployment_is_independent_of_generation(self):
         with patch.dict(
@@ -424,6 +710,7 @@ class ManualRunnerTests(unittest.TestCase):
         )
         return SimpleNamespace(
             cases=cases_path,
+            references=policy_reference_fixture(root, cases.load_cases(cases_path)),
             output_dir=root / "output",
             retain_dataset=False,
             agent_name="ask-hr",
@@ -488,6 +775,9 @@ class ManualRunnerTests(unittest.TestCase):
                     }
                 )
             )
+            args.references = policy_reference_fixture(
+                Path(temporary), cases.load_cases(args.cases)
+            )
             with (
                 patch.object(runner, "parse_args", return_value=args),
                 patch.object(runner, "check_evaluation_sdk"),
@@ -507,11 +797,25 @@ class ManualRunnerTests(unittest.TestCase):
             self.assertEqual(summary["case_checks"][0]["case_id"], "first")
 
     def test_manual_report_does_not_enforce_a_pass_gate(self):
-        summary = {"case_checks": [{"status": "unverified"}]}
+        summary = {"case_checks": [{"status": "failed"}]}
         runner.enforce_optional_pass_requirement(
             SimpleNamespace(require_behavior_pass=False), summary
         )
-        with self.assertRaisesRegex(RuntimeError, "not observable"):
+        with self.assertRaisesRegex(RuntimeError, "answer/citation"):
+            runner.enforce_optional_pass_requirement(
+                SimpleNamespace(require_behavior_pass=True), summary
+            )
+
+    def test_optional_gate_preserves_completeness_failures(self):
+        summary = {
+            "case_checks": [{"status": "passed"}],
+            "expected_behavior": {"cases": [{"results": [{"passed": True}]}]},
+            "policy_answers": {"cases": [{"results": [{"passed": False}]}]},
+        }
+        runner.enforce_optional_pass_requirement(
+            SimpleNamespace(require_behavior_pass=False), summary
+        )
+        with self.assertRaisesRegex(RuntimeError, "Policy-answer"):
             runner.enforce_optional_pass_requirement(
                 SimpleNamespace(require_behavior_pass=True), summary
             )
@@ -525,21 +829,21 @@ class ManualRunnerTests(unittest.TestCase):
             client.__enter__ = Mock(return_value=client)
             client.__exit__ = Mock(return_value=False)
             client.evals.create.side_effect = [
-                SimpleNamespace(id="eval-builtin"),
                 SimpleNamespace(id="eval-behavior"),
+                SimpleNamespace(id="eval-policy"),
             ]
             client.evals.runs.create.side_effect = [
-                completed_run("run-builtin"),
                 completed_run("run-behavior"),
+                completed_run("run-policy"),
             ]
             client.evals.runs.output_items.list.side_effect = [
+                [scored_item("test", ("behavioral_adherence",))],
                 [
                     scored_item(
                         "test",
-                        ("relevance", "groundedness", "intent_resolution", "coherence"),
+                        ("groundedness", "response_completeness"),
                     )
                 ],
-                [scored_item("test", ("behavioral_adherence",))],
             ]
             project = Mock()
             project.__enter__ = Mock(return_value=project)
@@ -563,8 +867,20 @@ class ManualRunnerTests(unittest.TestCase):
             ):
                 runner.main()
             summary_file = next((args.output_dir / "results").glob("*.json"))
+            summary = json.loads(summary_file.read_text())
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["assessment"]["passed"], 1)
+            self.assertNotIn("built_in", summary)
             self.assertEqual(
-                json.loads(summary_file.read_text())["status"], "completed"
+                summary["case_checks"],
+                [
+                    {
+                        "case_id": "test",
+                        "response_id": "response-test",
+                        "status": "passed",
+                        "failures": [],
+                    }
+                ],
             )
             uploaded_path = Path(
                 project.datasets.upload_file.call_args.kwargs["file_path"]
@@ -836,7 +1152,7 @@ class CapturedBenchmarkTests(unittest.TestCase):
                     ):
                         summary = kwargs["summary"]
                         summary["case_checks"][0]["status"] = (
-                            "passed" if checks_pass else "unverified"
+                            "passed" if checks_pass else "failed"
                         )
                         summary["expected_behavior"] = {
                             "cases": [

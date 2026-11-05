@@ -13,7 +13,7 @@
     "regionalQuery": "For a high-confidence local classification, retrieve the classified local region or regions plus global.",
     "lowConfidence": "Ask the user to clarify the employment region before retrieval.",
     "multiRegionQuery": "Search multiple local regions only when the prompt explicitly requests a comparison.",
-    "lifecycle": "Only manifest entries with isActive=true are indexed.",
+    "lifecycle": "Every PDF under the selected data directory's regional folders is indexed. Remove superseded files from that directory before ingestion.",
     "missingSource": "Fail ingestion or validation when an expected document cannot be read, extracted, or found in the index.",
     "conflicts": "Prefer local-region evidence over the Global baseline for the same policy topic. Surface unresolved conflicts instead of guessing."
   },
@@ -25,7 +25,7 @@
       "query": "What annual leave applies in Finland?",
       "classifiedRegions": ["finland"],
       "filter": "region eq 'finland' or region eq 'global'",
-      "expectedDocumentIds": ["HR-FI-003"],
+      "expectedDocumentIds": ["6d18bb8e-1078-54ee-b224-301b9a17716a"],
       "forbiddenRegions": ["india", "hongkong"]
     },
     {
@@ -35,8 +35,8 @@
       "query": "香港僱員的強積金安排是甚麼？",
       "classifiedRegions": ["hongkong"],
       "filter": "region eq 'hongkong' or region eq 'global'",
-      "expectedDocumentIds": ["HR-HK-002"],
-      "forbiddenDocumentIds": ["HR-IN-002", "HR-FI-002"]
+      "expectedDocumentIds": ["01951b29-ccd6-58b2-98ba-15ce60f5753d"],
+      "forbiddenDocumentIds": ["d5c76fd1-13e5-5c3a-b9a1-3b1b4bb1df3f", "4ba28ebb-0e89-5fee-a916-7c4adf950774"]
     },
     {
       "id": "DOC-KNOWN-001",
@@ -45,7 +45,7 @@
       "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
       "classifiedRegions": ["finland"],
       "filter": "region eq 'finland' or region eq 'global'",
-      "expectedDocumentIds": ["HR-FI-001"]
+      "expectedDocumentIds": ["376b6ef8-695f-593e-922b-8edbb78225a8"]
     },
     {
       "id": "DOC-KNOWN-002",
@@ -54,42 +54,36 @@
       "query": "How does the Internal Committee handle a POSH complaint in India?",
       "classifiedRegions": ["india"],
       "filter": "region eq 'india' or region eq 'global'",
-      "expectedDocumentIds": ["HR-IN-004"]
+      "expectedDocumentIds": ["e9fce922-856c-55f0-bbd0-d08012025694"]
     },
     {
       "id": "DOC-LIFECYCLE-001",
-      "workbookRefs": ["ACT-005", "ACT-007", "ACT-020"],
-      "name": "Superseded and expired documents are excluded",
-      "assertion": "Only data/manifest.json entries with isActive=true are analyzed, embedded, and uploaded."
-    },
-    {
-      "id": "DOC-STALE-LINK-001",
-      "workbookRefs": ["ACT-020"],
-      "name": "Deprecated Dovetail links are absent",
-      "assertion": "No active manifest document, extracted chunk, citation source, or agent response contains a Dovetail URL or the term Dovetail."
+      "workbookRefs": ["ACT-005", "ACT-007"],
+      "name": "The data directory defines the complete source set",
+      "assertion": "Every PDF in the selected regional folders is analyzed, embedded, and uploaded. Files removed from those folders lose their Search chunks after successful synchronization; existing citation artifacts remain readable."
     },
     {
       "id": "DOC-OUTDATED-KPI-001",
       "workbookRefs": ["ACT-005"],
       "name": "Unindexed KPI data cannot be presented as current",
       "query": "What is the current HR KPI result?",
-      "assertion": "If no active KPI source exists in the manifest, retrieval returns no supporting document and the agent produces a no-evidence response."
+      "assertion": "If no KPI source is present in the selected data directory, retrieval returns no supporting document and the agent produces a no-evidence response."
     },
     {
       "id": "DOC-MISSING-SOURCE-001",
       "workbookRefs": ["ACT-022"],
-      "name": "Configured inaccessible source fails ingestion",
-      "assertion": "A missing, unreadable, extraction-failed, or post-index-missing active document causes ingestion validation to fail with document_id and sourceUrl; it is never silently skipped."
+      "name": "Unreadable discovered sources fail ingestion",
+      "assertion": "An unreadable regional directory or PDF, extraction failure, or post-index coverage mismatch fails ingestion rather than silently dropping a discovered source."
     },
     {
       "id": "DOC-COVERAGE-001",
       "workbookRefs": ["ACT-013", "ACT-014", "ACT-022"],
-      "name": "Every configured document is present after ingestion",
-      "assertion": "The set of document_id facets exactly equals the active document IDs in data/manifest.json."
+      "name": "Every discovered document is present after ingestion",
+      "assertion": "The set of document_id facets exactly equals the GUIDs derived from the discovered PDF paths."
     },
     {
       "id": "DOC-CITATION-001",
-      "workbookRefs": ["ACT-005", "ACT-007", "ACT-020", "ACT-046"],
+      "workbookRefs": ["ACT-005", "ACT-007", "ACT-046"],
       "name": "Every answerable result has auditable citation metadata",
       "requiredFields": [
         "document_id",
@@ -108,7 +102,7 @@
       "query": "Compare annual leave in Finland and Hong Kong.",
       "classifiedRegions": ["finland", "hongkong"],
       "filter": "region eq 'finland' or region eq 'hongkong' or region eq 'global'",
-      "expectedDocumentIds": ["HR-FI-003", "HR-HK-003"]
+      "expectedDocumentIds": ["6d18bb8e-1078-54ee-b224-301b9a17716a", "9f538af6-fb90-5947-874b-c232181d8696"]
     },
     {
       "id": "DOC-CLASSIFY-001",

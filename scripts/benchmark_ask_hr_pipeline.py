@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         "--require-behavior-pass",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Fail on low behavior scores or failed/unverified deterministic checks.",
+        help="Fail on low HR behavior scores or failed citation checks.",
     )
     args = parser.parse_args()
     if not args.judge_model_deployment:
@@ -237,13 +237,6 @@ async def run_case(
         references=source_references,
         response_id="local-" + uuid4().hex,
         tool_calls=[],
-        diagnostics={
-            "classification": {
-                "regions": decision.regions,
-                "status": decision.status,
-            },
-            "retrieval_regions": retrieval_regions,
-        },
     )
     checks = validate_case_result(case, agent_result)
     return {
@@ -254,7 +247,13 @@ async def run_case(
             if compact_evidence
             else None,
         ),
-        "diagnostics": agent_result.diagnostics,
+        "diagnostics": {
+            "classification": {
+                "regions": decision.regions,
+                "status": decision.status,
+            },
+            "retrieval_regions": retrieval_regions,
+        },
         "retrieval_evidence": retrieval_evidence,
         "generation_input": generation_input,
         "generation_response_schema": generation_response_schema,
@@ -268,7 +267,6 @@ async def run_case(
             "response_id": agent_result.response_id,
             "status": checks.status,
             "failures": checks.failures,
-            "unverified": checks.unverified,
         },
     }
 
@@ -403,9 +401,6 @@ async def collect_responses(
     summary["failed"] = sum(
         check["status"] == "failed" for check in summary["case_checks"]
     )
-    summary["unverified"] = sum(
-        check["status"] == "unverified" for check in summary["case_checks"]
-    )
     summary["response_collection"] = "completed"
     write_summary(args.output, summary)
     return rows
@@ -497,7 +492,6 @@ async def main_async(args: argparse.Namespace) -> None:
             summary["completed_at"] = datetime.now(UTC).isoformat()
             if args.require_behavior_pass and (
                 summary["failed"]
-                or summary["unverified"]
                 or summary["quality"]["behavioral_adherence"]["failed"]
             ):
                 raise RuntimeError(

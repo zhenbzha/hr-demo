@@ -1,4 +1,4 @@
-"""Prepare source-reviewed, immutable answer replays and judge comparisons."""
+"""Load saved answers and reviewed references for evaluator checks."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agent import build_captured_agent_query
+from .agent import build_captured_agent_query, captured_response_items
 from .cases import expected_behavior
-from .foundry import BEHAVIOR_PROMPT, dataset_schema
+from .foundry import dataset_schema
 
 REPLAY_METRICS = {
     "relevance",
@@ -25,6 +25,23 @@ REPLAY_METRICS = {
 
 @dataclass
 class ReferenceReplay:
+    """
+    Saved answers, reference answers, and expected evaluation results.
+
+    Attributes
+    ----------
+    rows : list of dict
+        Saved answers and policy text, with reviewed reference answers.
+    generation_case_ids : set of str
+        IDs of samples with saved requests to the answer-generation model.
+    expectations : dict
+        Expected pass/fail results grouped by sample ID and metric.
+        Used only for local comparison with the returned scores.
+    provenance : dict
+        Source files, hashes, review status, and details of which
+        samples have saved generation requests.
+    """
+
     rows: list[dict[str, Any]]
     generation_case_ids: set[str]
     expectations: dict[str, dict[str, bool]]
@@ -45,6 +62,19 @@ def _verified_file(root: Path, item: dict[str, Any], label: str) -> Path:
     return path
 
 
+def _analysis_page_text(analysis: dict[str, Any]) -> dict[int, str]:
+    """Collect each page's text using its recorded character offsets."""
+    pages = {}
+    for page in analysis["pages"]:
+        text_parts = []
+        for span in page["spans"]:
+            start = span["offset"]
+            end = start + span["length"]
+            text_parts.append(analysis["content"][start:end])
+        pages[page["pageNumber"]] = "".join(text_parts)
+    return pages
+
+
 def _verify_sources(root: Path, sources: list[dict[str, Any]]) -> set[str]:
     identifiers: set[str] = set()
     for source in sources:
@@ -61,13 +91,7 @@ def _verify_sources(root: Path, sources: list[dict[str, Any]]) -> set[str]:
             raise ValueError(
                 f"{identifier}: reference verification requires Unicode code-point spans"
             )
-        pages = {
-            page["pageNumber"]: "".join(
-                analysis["content"][span["offset"] : span["offset"] + span["length"]]
-                for span in page["spans"]
-            )
-            for page in analysis["pages"]
-        }
+        pages = _analysis_page_text(analysis)
         for passage in source["passages"]:
             quote = _text(passage.get("quote"), identifier + " source quote")
             if quote not in pages[passage["page"]]:
@@ -75,6 +99,24 @@ def _verify_sources(root: Path, sources: list[dict[str, Any]]) -> set[str]:
                     f"{identifier}: reference quote is absent from its stated PDF page"
                 )
     return identifiers
+
+
+def _previous_case_scores(
+    report: dict[str, Any], case_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Collect a saved case's scores and run IDs from both scoring stages."""
+    scores = {}
+    for stage_name in ("built_in", "expected_behavior"):
+        stage = report[stage_name]
+        case_scores = next(
+            case for case in stage["cases"] if case["case_id"] == case_id
+        )
+        scores[stage_name] = {
+            "evaluation_id": stage["evaluation_id"],
+            "run_id": stage["run_id"],
+            "case": case_scores,
+        }
+    return scores
 
 
 def load_reference_replay(
@@ -87,6 +129,39 @@ def load_reference_replay(
     behavior_threshold: float,
     require_review: bool = True,
 ) -> ReferenceReplay:
+    """
+    Load saved answers and verify them against reviewed source material.
+
+    Read the reference file, PDFs, saved analysis, and captured responses.
+    Verify file hashes, quoted passages, model requests, cases, and scoring
+    settings before building evaluation rows.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        JSON file describing the reference answers and their source files.
+        Paths to PDFs, saved analysis, and captured responses are relative
+        to this file's directory.
+    cases : list of dict
+        Original test questions and expectations returned by ``load_cases``.
+    cases_sha256 : str
+        SHA-256 hash of the case file used to collect the saved responses.
+    project_endpoint : str
+        Foundry project used for the saved evaluation.
+    model_deployment : str
+        Judge deployment used for the saved evaluation.
+    behavior_threshold : float
+        HR behavior score threshold used for the saved evaluation.
+    require_review : bool, default=True
+        Require completed review of the reference answers. Set to False
+        only when preparing inputs for review.
+
+    Returns
+    -------
+    ReferenceReplay
+        Rows to score, IDs eligible for instruction-adherence scoring,
+        expected pass/fail labels, and source-verification details.
+    """
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported reference-replay schema version")
@@ -116,10 +191,10 @@ def load_reference_replay(
         "project_endpoint": project_endpoint,
         "judge_deployment": model_deployment,
         "behavior_threshold": behavior_threshold,
-        "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
         "response_collection": "completed",
         "behavior_evaluator": manifest["behavior_evaluator"],
     }
+    rubric_sha256 = None
     for capture in manifest["captures"]:
         identifier = _text(capture.get("id"), "Capture ID")
         if identifier in captures:
@@ -130,6 +205,10 @@ def load_reference_replay(
             raise ValueError(
                 f"{identifier}: captured cases, rubric or scoring configuration differ"
             )
+        recorded_rubric = _text(report.get("rubric_sha256"), "Captured rubric SHA-256")
+        if rubric_sha256 is not None and recorded_rubric != rubric_sha256:
+            raise ValueError("Captured rubric hashes differ")
+        rubric_sha256 = recorded_rubric
         instructions = _text(
             capture.get("generation_instructions"), "Generation instructions"
         )
@@ -194,7 +273,8 @@ def load_reference_replay(
                 raise ValueError(
                     f"{identifier}: expected results must name metrics with boolean labels"
                 )
-            row = {field: original[field] for field in fields}
+            row = {field: original[field] for field in fields if field != "output_items"}
+            row["output_items"] = captured_response_items(original)
             row["case_id"] = identifier
             row["ground_truth"] = truth
             generation_input = original.get("generation_input")
@@ -231,18 +311,7 @@ def load_reference_replay(
                     "label_reason": _text(
                         sample.get("reason"), identifier + " label reason"
                     ),
-                    "previous_scores": {
-                        stage: {
-                            "evaluation_id": report[stage]["evaluation_id"],
-                            "run_id": report[stage]["run_id"],
-                            "case": next(
-                                item
-                                for item in report[stage]["cases"]
-                                if item["case_id"] == original_id
-                            ),
-                        }
-                        for stage in ("built_in", "expected_behavior")
-                    },
+                    "previous_scores": _previous_case_scores(report, original_id),
                 }
             )
     if not rows:
@@ -252,6 +321,7 @@ def load_reference_replay(
         generation_case_ids=generations,
         expectations=expectations,
         provenance={
+            "rubric_sha256": rubric_sha256,
             "manifest": manifest,
             "manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "samples": samples,
@@ -274,6 +344,30 @@ def load_reference_replay(
 def compare_reference_judgments(
     summary: dict[str, Any], expectations: dict[str, dict[str, bool]]
 ) -> dict[str, Any]:
+    """
+    Compare evaluator pass/fail results with the reviewed expectations.
+
+    Parameters
+    ----------
+    summary : dict
+        Replay report containing scored ``built_in``,
+        ``expected_behavior``, and optional ``task_adherence`` stages.
+    expectations : dict
+        Expected pass/fail results from ``ReferenceReplay``, grouped by
+        sample ID and metric. Only labeled metrics are compared.
+
+    Returns
+    -------
+    dict
+        Agreement, false-pass, and false-fail counts for each metric,
+        plus individual comparisons. ``passed`` is True when all labeled
+        results agree.
+
+    Raises
+    ------
+    ValueError
+        A required score is missing or unscored, or a result is duplicated.
+    """
     observed: dict[tuple[str, str], dict[str, Any]] = {}
     for stage in ("built_in", "expected_behavior", "task_adherence"):
         for case in summary.get(stage, {}).get("cases", []):
@@ -290,13 +384,12 @@ def compare_reference_judgments(
             if result is None or type(result["passed"]) is not bool:
                 raise ValueError(f"{case_id}/{metric}: reviewed result is unscored")
             passed = result["passed"]
-            outcome = (
-                "agreement"
-                if passed == expected
-                else "false_pass"
-                if passed
-                else "false_fail"
-            )
+            if passed == expected:
+                outcome = "agreement"
+            elif passed:
+                outcome = "false_pass"
+            else:
+                outcome = "false_fail"
             totals = counts.setdefault(
                 metric, {"agreement": 0, "false_pass": 0, "false_fail": 0}
             )

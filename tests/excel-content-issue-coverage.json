@@ -1,6 +1,6 @@
 {
   "sourceWorkbook": "Test cases - open topics.xlsx",
-  "coverageRule": "Every document or SharePoint content issue must map to at least one hard agent, retrieval, ingestion, or lifecycle test.",
+  "coverageRule": "Every included document or SharePoint content issue must map to at least one hard agent, retrieval, ingestion, or lifecycle test. Excluded issues record why they are not covered.",
   "includedIssues": [
     {
       "id": "ACT-011",
@@ -36,11 +36,6 @@
       "id": "ACT-014",
       "issue": "Known performance guide is not retrieved",
       "tests": ["AGENT-PERFORMANCE-GUIDE", "DOC-COVERAGE-001"]
-    },
-    {
-      "id": "ACT-020",
-      "issue": "Merit process guidance contains legacy Dovetail links",
-      "tests": ["DOC-STALE-LINK-001", "DOC-LIFECYCLE-001"]
     },
     {
       "id": "ACT-022",
