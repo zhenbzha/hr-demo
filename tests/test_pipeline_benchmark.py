@@ -245,7 +245,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 cases=root / "cases.json",
                 output=root / "report.json",
                 judge_model_deployment="judge",
-                behavior_threshold=4,
+                rubric_threshold=0.75,
                 label="test",
                 poll_interval=1,
                 timeout=60,
@@ -358,7 +358,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             knowledge_base_name="candidate-kb",
             knowledge_source_name="candidate-ks",
             judge_model_deployment="judge",
-            behavior_threshold=4,
+            rubric_threshold=0.75,
             poll_interval=1,
             timeout=60,
             request_timeout=30,
@@ -377,14 +377,18 @@ class BenchmarkRunnerTests(unittest.TestCase):
                     "built_in",
                     ("groundedness", "relevance", "intent_resolution", "coherence"),
                 ),
-                ("expected_behavior", ("behavioral_adherence",)),
+                ("expected_behavior", ("hr_rubric",)),
             ):
                 kwargs["summary"][stage] = {
                     "cases": [
                         {
                             "case_id": "test",
                             "results": [
-                                {"name": name, "score": 5, "passed": True}
+                                {
+                                    "name": name,
+                                    "score": 1 if name == "hr_rubric" else 5,
+                                    "passed": True,
+                                }
                                 for name in names
                             ],
                         }
@@ -446,7 +450,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             summary = self._run(Path(temporary))
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["latency"]["totalSeconds"]["samples"], 1)
-        self.assertEqual(summary["quality"]["behavioral_adherence"]["passed"], 1)
+        self.assertEqual(summary["quality"]["hr_rubric"]["passed"], 1)
         self.assertEqual(summary["binding"]["indexName"], "candidate-index")
         self.assertEqual(summary["agent"]["generation_instructions"], "Use the policy.")
         self.assertEqual(

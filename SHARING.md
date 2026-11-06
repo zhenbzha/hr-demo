@@ -408,7 +408,7 @@ of generic relevance, intent-resolution, coherence and groundedness scores:
 
 | Scope | Checks |
 |---|---|
-| All 17 cases | Existing HR expected-behavior rubric and citation checks |
+| All 17 cases | Native weighted HR rubric and existing citation checks |
 | 13 policy-answer cases | Built-in Groundedness and Response Completeness |
 | Four cases explicitly expecting zero citations | Their existing clarification/no-policy requirements, without demanding an invented policy answer |
 
@@ -461,10 +461,40 @@ The following adaptations have specific HR/application requirements:
 | Use the HR behavior rubric, with policy-grounding and reference-completeness checks | Answers must follow the supplied fictional policies, local/Global precedence, and appropriate clarification or abstention. [Microsoft's agent-evaluation guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent) recommends an agent-specific rubric as the primary measure. |
 | Check returned citation IDs, regions, and page fields | The demo requires answers to cite the correct policy and physical pages; these are directly observable response requirements. |
 
-The HR rubric uses the approved preview API and supplied fictional policy,
-not external employment law, as its reference. The citation transport is not
-a Search tool execution record, so the sample's tool-execution evaluator is
-not added merely to score that transport.
+The HR grader is a native `EvaluatorDefinitionType.RUBRIC` evaluator, registered
+and version-pinned using the
+[official manual rubric sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/sample_rubric_evaluator_manual.py).
+It replaces the custom prompt-based HR grader, not Groundedness or Response
+Completeness. The fixed, always-applicable dimensions are:
+
+| Dimension | Relative weight |
+|---|---:|
+| HR request handling, including correct clarification/no-policy responses | 10 |
+| Policy scope and evidence, including local/Global precedence | 5 |
+| General answer quality, including the employee's language | 2 |
+
+These dimensions, weights, and the 0.75 threshold are application choices, not
+Microsoft defaults. Foundry scores each dimension from 1 to 5 and returns the
+normalized weighted result: `(weighted mean - 1) / 4`. A dimension scored 1
+fails the rubric regardless of the aggregate. The rubric definition and its hash,
+registered version, per-dimension scores, weights, and explanations are retained.
+The new metric is named `hr_rubric`, on a 0-1 scale; it is **not directly
+comparable** to the old holistic `behavioral_adherence` score.
+
+The exact-deadline wording requirement applies to deadline-specific questions,
+not every date mentioned in a broader process or benefits answer. This preserves
+the existing operative-deadline case without adding quotation requirements to
+the other cases.
+
+The native evaluator receives the actual question (the recorded conversation for
+local benchmarks), structured response items, and recorded tool definitions.
+It does not consume arbitrary `expected_behavior` or reference-answer fields:
+the fixed dimension descriptions encode the common HR requirements, so review
+them when adding new case requirements. Separate citation checks and the
+PDF-reference evaluators retain their own case-specific inputs.
+Supplied fictional policy, not external employment law, is authoritative.
+The citation transport is not a Search tool execution record, so the sample's
+tool-execution evaluator is not added merely to score that transport.
 
 The default is a **manual diagnostic report**, not an automatic pass gate.
 Citation checks return `passed` or `failed`. There are no internal classifier or
@@ -477,8 +507,9 @@ Null, non-finite, missing, duplicate, or inconsistent evaluation scores are
 errors even when Foundry marks a run completed. These errors fail the command
 and leave a partial report. Ordinary low scores remain visible for manual
 review. `--require-behavior-pass` optionally enforces the configured
-expected-behavior threshold and rejects failed citation checks and applicable
-policy-answer scores. The existing HR threshold remains 4/5; the built-in
+native rubric threshold and rejects failed citation checks and applicable
+policy-answer scores. `--rubric-threshold` defaults to 0.75 (a weighted mean of
+4/5, but not the same grader as the historical holistic score); the built-in
 Groundedness and Response Completeness thresholds remain their defaults (3/5).
 This gate also applies when rescoring saved responses with `--benchmark-report`;
 the completed scores remain in the report even when the gate fails.
@@ -486,9 +517,11 @@ the completed scores remain in the report even when the gate fails.
 Reports include `evaluation_plan`, reference provenance, separate
 `expected_behavior` and `policy_answers` stages, and an `assessment` listing
 failed requirements for every case. The new assessment is **not comparable**
-to the historical all-generic-metrics intersection. Historical reports and
-the benchmark/reference-replay diagnostic profiles are retained unchanged;
-their generic scores must not be presented as overall HR correctness.
+to the historical all-generic-metrics intersection. Historical reports are
+retained unchanged. New benchmark runs also use the native HR rubric while
+retaining their generic diagnostic metrics; historical reference replay keeps
+its recorded prompt evaluator. Generic scores must not be presented as overall
+HR correctness.
 When validating evaluator changes, keep positive and deliberately incorrect
 controls separate from agent results and retain their raw judge decisions.
 
@@ -547,6 +580,10 @@ The replay uses the documented native Foundry contracts:
 - The existing expected-behavior evaluator is retrieved by its recorded version
   and checked against the rubric hash in the original captures, not silently
   replaced by a newer local rubric.
+
+`--behavior-threshold` is reserved for this historical replay mode (default 4
+on its original 1-5 scale). New hosted/benchmark scoring uses
+`--rubric-threshold` instead; the two scales are not silently interchanged.
 
 Structured response items use the same role/content conversion when available.
 Older, text-only captures are represented as a single assistant message containing
@@ -675,8 +712,9 @@ pipeline timing. Answers failing deterministic checks are still scored and their
 latencies retained. A failed collection or incomplete/unscorable Foundry result
 leaves an explicitly incomplete report, never a successful latency-only result.
 Ordinary quality failures remain a manual report; `--require-behavior-pass`
-optionally makes them a failing exit status. The behavior threshold defaults to
-4/5; `--judge-model-deployment` can select a judge separately from generation.
+optionally makes them a failing exit status. The native `--rubric-threshold`
+defaults to 0.75 on the 0-1 scale; `--judge-model-deployment` can select a judge
+separately from generation.
 
 After an evaluator execution failure, `run_foundry_evaluation.py --benchmark-report
 <path>` can rescore completed captured responses. It verifies and reuses the

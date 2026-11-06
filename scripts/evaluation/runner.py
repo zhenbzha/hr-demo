@@ -21,10 +21,13 @@ from .foundry import (
     EvaluationSettings,
     behavior_criterion,
     built_in_criteria,
-    create_behavior_evaluator,
+    create_rubric_evaluator,
     dataset_schema,
     evaluation_summary,
     policy_answer_criteria,
+    rubric_criterion,
+    rubric_definition,
+    rubric_fingerprint,
     start_run,
     task_adherence_criterion,
     wait_for_run,
@@ -189,7 +192,7 @@ def run_stage(
         items=items,
         expected_case_ids=case_ids,
         criterion_names={criterion["name"] for criterion in criteria},
-        threshold=settings.behavior_threshold if label == "expected_behavior" else None,
+        threshold=settings.pass_threshold if label == "expected_behavior" else None,
     )
     summary[label]["output_items"] = [
         json.loads(item.model_dump_json(exclude_none=True)) for item in items
@@ -357,7 +360,7 @@ def score_dataset(
     evaluation_name : str
         Display-name prefix for the two scoring stages.
     settings : EvaluationSettings
-        Judge deployment, HR behavior threshold, and polling limits.
+        Judge deployment, native HR rubric threshold, and polling limits.
     credential : TokenCredential
         Entra credential with dataset, evaluation, and model access.
     dataset_path : pathlib.Path
@@ -382,6 +385,14 @@ def score_dataset(
         Groundedness and Response Completeness. None preserves the legacy
         diagnostic profile used by benchmark/replay callers.
     """
+    definition = rubric_definition(settings.pass_threshold)
+    fingerprint = rubric_fingerprint(settings.pass_threshold)
+    if summary.get("rubric_sha256", fingerprint) != fingerprint:
+        raise ValueError("Scoring rubric differs from the declared native definition")
+    summary["rubric_sha256"] = fingerprint
+    summary["rubric_threshold"] = settings.pass_threshold
+    summary["rubric_definition"] = definition
+    summary["hr_score_format"] = "native_weighted_rubric_0_to_1"
     inline_rows = None
     if agent_inputs or policy_case_ids is not None:
         dataset_bytes = dataset_path.read_bytes()
@@ -415,7 +426,7 @@ def score_dataset(
                 row["case_id"] in policy_case_ids
             ):
                 raise ValueError("Reference answers do not match the declared policy cases")
-        summary["evaluation_profile"] = "pdf_reference_v1"
+        summary["evaluation_profile"] = "pdf_reference_native_rubric_v1"
         summary["evaluation_plan"] = {
             "behavior_case_ids": sorted(case_ids),
             "policy_answer_case_ids": sorted(policy_case_ids),
@@ -479,15 +490,16 @@ def score_dataset(
                 inline_rows=inline_rows,
                 schema=schema,
             )
-        evaluator = create_behavior_evaluator(project)
+        evaluator = create_rubric_evaluator(project, settings)
         summary["behavior_evaluator"] = {
             "name": evaluator.name,
             "version": evaluator.version,
+            "type": "rubric",
         }
         run_stage(
             client=client,
             name=evaluation_name + " - expected behavior",
-            criteria=[behavior_criterion(evaluator, settings)],
+            criteria=[rubric_criterion(evaluator, settings, agent_inputs=agent_inputs)],
             settings=settings,
             summary=summary,
             summary_path=summary_path,

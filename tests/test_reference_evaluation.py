@@ -25,6 +25,7 @@ def write_json(path, value):
 
 def reference_fixture(root):
     args = existing_tests.ManualRunnerTests.arguments(root)
+    args.behavior_threshold = 4
     args.replay_cases = root / "references.json"
     source = root / "source.pdf"
     source.write_bytes(b"Synthetic source bytes for an offline contract test")
@@ -45,7 +46,7 @@ def reference_fixture(root):
         "hardRequirement": True,
     }
     case_hash = write_json(args.cases, {"cases": [original_case, clarification]})
-    rubric_hash = hashlib.sha256(foundry.BEHAVIOR_PROMPT.encode()).hexdigest()
+    rubric_hash = hashlib.sha256(b"Recorded historical prompt fixture.").hexdigest()
     instructions = "Use the provided policy."
     captures = []
     for identifier, answer in (("bad", "More than two days."), ("good", text)):

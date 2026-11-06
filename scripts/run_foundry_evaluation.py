@@ -23,7 +23,11 @@ from evaluation.cases import (
     load_cases,
     validate_case_result,
 )
-from evaluation.foundry import BEHAVIOR_PROMPT, EvaluationSettings
+from evaluation.foundry import (
+    DEFAULT_RUBRIC_THRESHOLD,
+    EvaluationSettings,
+    rubric_fingerprint,
+)
 from evaluation.references import load_policy_references, policy_dataset_rows
 from evaluation.replay import compare_reference_judgments, load_reference_replay
 from evaluation.runner import (
@@ -98,8 +102,21 @@ def _validate_arguments(
             parser.error(f"{name} must be finite and positive")
     if not math.isfinite(args.max_retry_seconds) or args.max_retry_seconds < 0:
         parser.error("max_retry_seconds must be finite and nonnegative")
-    if not 1 <= args.behavior_threshold <= 5:
-        parser.error("behavior_threshold must be between 1 and 5")
+    if not math.isfinite(args.rubric_threshold) or not 0 <= args.rubric_threshold <= 1:
+        parser.error("rubric_threshold must be finite and between 0 and 1")
+    if args.replay_cases is not None:
+        if args.behavior_threshold is None:
+            args.behavior_threshold = 4
+        if (
+            not math.isfinite(args.behavior_threshold)
+            or not 1 <= args.behavior_threshold <= 5
+        ):
+            parser.error("Historical behavior_threshold must be between 1 and 5")
+    elif args.behavior_threshold is not None:
+        parser.error(
+            "--behavior-threshold is only for historical --replay-cases; "
+            "use --rubric-threshold"
+        )
     if not args.cases.is_file():
         parser.error(f"Cases file does not exist: {args.cases}")
     if (
@@ -174,7 +191,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--request-timeout", type=float, default=300)
     parser.add_argument("--max-retry-seconds", type=float, default=300)
-    parser.add_argument("--behavior-threshold", type=float, default=4)
+    parser.add_argument(
+        "--rubric-threshold", type=float, default=DEFAULT_RUBRIC_THRESHOLD,
+        help="Native HR rubric passing score, 0-1. Default: 0.75.",
+    )
+    parser.add_argument(
+        "--behavior-threshold", type=float,
+        help="Historical --replay-cases only: recorded prompt threshold, 1-5 (default 4).",
+    )
     parser.add_argument(
         "--require-behavior-pass",
         action=argparse.BooleanOptionalAction,
@@ -311,9 +335,9 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
     summary = json.loads(args.benchmark_report.read_text(encoding="utf-8"))
     expected_metadata = {
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-        "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
+        "rubric_sha256": rubric_fingerprint(args.rubric_threshold),
         "judge_deployment": args.model_deployment,
-        "behavior_threshold": args.behavior_threshold,
+        "rubric_threshold": args.rubric_threshold,
         "project_endpoint": args.project_endpoint,
     }
     if (
@@ -354,7 +378,7 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
                 evaluation_name=args.evaluation_name,
                 settings=EvaluationSettings(
                     args.model_deployment,
-                    args.behavior_threshold,
+                    args.rubric_threshold,
                     args.poll_interval,
                     args.timeout,
                 ),
@@ -482,9 +506,9 @@ def main() -> None:
         "status": "incomplete",
         "dataset_version": version,
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-        "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
+        "rubric_sha256": rubric_fingerprint(args.rubric_threshold),
         "judge_deployment": args.model_deployment,
-        "behavior_threshold": args.behavior_threshold,
+        "rubric_threshold": args.rubric_threshold,
         "reference_answers": references.provenance,
         "agent": {
             "name": args.agent_name,
@@ -515,7 +539,7 @@ def main() -> None:
                 evaluation_name=args.evaluation_name,
                 settings=EvaluationSettings(
                     args.model_deployment,
-                    args.behavior_threshold,
+                    args.rubric_threshold,
                     args.poll_interval,
                     args.timeout,
                 ),

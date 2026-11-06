@@ -69,6 +69,25 @@ def scored_item(case_id: str, names: tuple[str, ...], *, score=5, passed=True):
     )
 
 
+def rubric_item(case_id="test", scores=(5, 5, 5), *, threshold=0.75):
+    dimensions = [
+        {
+            "id": definition["id"], "weight": definition["weight"],
+            "applicable": True, "score": score, "reason": "Observed requirement.",
+        }
+        for definition, score in zip(foundry.RUBRIC_DIMENSIONS, scores, strict=True)
+    ]
+    aggregate = sum(
+        dimension["weight"] * (dimension["score"] - 1) / 4 for dimension in dimensions
+    ) / sum(dimension["weight"] for dimension in dimensions)
+    item = scored_item(
+        case_id, ("hr_rubric",), score=aggregate,
+        passed=aggregate >= threshold and min(scores) > 1,
+    )
+    item.results[0].properties = {"dimension_scores": dimensions}
+    return item
+
+
 def completed_run(identifier: str = "run-test", **counts):
     return RunCreateResponse.model_construct(
         id=identifier,
@@ -567,7 +586,7 @@ class PolicyReferenceTests(unittest.TestCase):
                         "case_id": case["id"],
                         "results": [
                             {
-                                "name": "behavioral_adherence",
+                                "name": "hr_rubric",
                                 "passed": case["id"] == "answer",
                             }
                         ],
@@ -593,7 +612,7 @@ class PolicyReferenceTests(unittest.TestCase):
             assessment["cases"][0]["failed_requirements"], ["response_completeness"]
         )
         self.assertEqual(
-            assessment["cases"][1]["failed_requirements"], ["behavioral_adherence"]
+            assessment["cases"][1]["failed_requirements"], ["hr_rubric"]
         )
         summary["policy_answers"]["cases"] = []
         with self.assertRaisesRegex(ValueError, "missing or duplicate"):
@@ -650,7 +669,7 @@ class PolicyReferenceTests(unittest.TestCase):
                     project_endpoint="https://example.test",
                     dataset_name="answers",
                     evaluation_name="quality",
-                    settings=foundry.EvaluationSettings("judge", 4, 1, 60),
+                    settings=foundry.EvaluationSettings("judge", 0.75, 1, 60),
                     credential=Mock(),
                     dataset_path=path,
                     summary=summary,
@@ -661,6 +680,115 @@ class PolicyReferenceTests(unittest.TestCase):
             self.assertEqual(stage.call_args_list[0].kwargs["case_ids"], {"answer", "clarify"})
             self.assertEqual(stage.call_args_list[1].kwargs["case_ids"], {"answer"})
             self.assertEqual(summary["assessment"]["failed"], 2)
+
+
+class NativeRubricTests(unittest.TestCase):
+    def summary(self, item, threshold=0.75):
+        return foundry.evaluation_summary(
+            evaluation=EvalCreateResponse.model_construct(id="eval-native"),
+            run=completed_run(
+                passed=int(item.results[0].passed),
+                failed=int(not item.results[0].passed),
+            ),
+            items=[item], expected_case_ids={"test"}, criterion_names={"hr_rubric"},
+            threshold=threshold,
+        )
+
+    def test_native_registration_and_supported_recorded_input_mappings(self):
+        project = Mock()
+        project.evaluators.create_version.return_value = SimpleNamespace(
+            name="native", version="2"
+        )
+        settings = foundry.EvaluationSettings("judge", 0.75, 1, 60)
+        evaluator = foundry.create_rubric_evaluator(project, settings)
+        requested = project.evaluators.create_version.call_args.kwargs
+        definition = requested["evaluator_version"]["definition"]
+        self.assertEqual(definition["type"], "rubric")
+        self.assertNotIn("prompt_text", definition)
+        self.assertNotIn("headers", requested)
+        self.assertEqual(definition["pass_threshold"], 0.75)
+        criterion = foundry.rubric_criterion(evaluator, settings)
+        self.assertEqual(criterion["evaluator_version"], "2")
+        self.assertEqual(
+            criterion["initialization_parameters"], {"deployment_name": "judge"}
+        )
+        self.assertEqual(criterion["data_mapping"], {
+            "query": "{{item.query}}", "response": "{{item.output_items}}",
+            "tool_definitions": "{{item.tool_definitions}}",
+        })
+        captured_criterion = foundry.rubric_criterion(
+            evaluator, settings, agent_inputs=True
+        )
+        self.assertEqual(
+            captured_criterion["data_mapping"]["query"], "{{item.agent_query}}"
+        )
+        self.assertNotEqual(
+            foundry.rubric_fingerprint(0.75), foundry.rubric_fingerprint(0.8)
+        )
+
+    def test_normalized_scores_and_dimension_explanations_are_preserved(self):
+        for scores in ((1, 1, 1), (4, 4, 4), (5, 5, 5)):
+            with self.subTest(scores=scores):
+                summary = self.summary(rubric_item(scores=scores))
+                self.assertEqual(summary["validation_errors"], [])
+                result = summary["cases"][0]["results"][0]
+                self.assertEqual(
+                    [dimension["score"] for dimension in result["dimension_scores"]],
+                    list(scores),
+                )
+                self.assertTrue(result["dimension_scores"][0]["reason"])
+
+    def test_one_critical_dimension_fails_even_above_aggregate_threshold(self):
+        item = rubric_item(scores=(5, 5, 1))
+        self.assertGreater(item.results[0].score, 0.75)
+        self.assertEqual(self.summary(item)["validation_errors"], [])
+        item.results[0].passed = True
+        self.assertTrue(self.summary(item)["validation_errors"])
+
+    def test_incomplete_or_inconsistent_native_results_are_errors(self):
+        for invalid in (
+            "score", "nonfinite", "missing", "duplicate",
+            "weight", "skipped", "aggregate", "dimension",
+        ):
+            with self.subTest(invalid=invalid):
+                item = rubric_item()
+                dimensions = item.results[0].properties["dimension_scores"]
+                if invalid == "score":
+                    item.results[0].score = 4
+                elif invalid == "nonfinite":
+                    item.results[0].score = float("nan")
+                elif invalid == "missing":
+                    dimensions.pop()
+                elif invalid == "duplicate":
+                    dimensions[-1] = dict(dimensions[0])
+                elif invalid == "weight":
+                    dimensions[0]["weight"] += 1
+                elif invalid == "skipped":
+                    dimensions[0]["applicable"] = False
+                elif invalid == "dimension":
+                    dimensions[0]["score"] = float("nan")
+                else:
+                    item.results[0].score = 0.9
+                self.assertTrue(self.summary(item)["validation_errors"])
+
+    def test_new_and_historical_cli_thresholds_are_not_silently_interchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = ManualRunnerTests.arguments(Path(temporary))
+            args.check_sdk = True
+            parser = Mock()
+            parser.error.side_effect = ValueError
+            runner._validate_arguments(parser, args)
+            args.behavior_threshold = 4
+            with self.assertRaises(ValueError):
+                runner._validate_arguments(parser, args)
+            args.behavior_threshold = None
+            args.rubric_threshold = 4
+            with self.assertRaises(ValueError):
+                runner._validate_arguments(parser, args)
+            args.rubric_threshold = 0.75
+            args.replay_cases = args.cases
+            runner._validate_arguments(parser, args)
+            self.assertEqual(args.behavior_threshold, 4)
 
 
 class ManualRunnerTests(unittest.TestCase):
@@ -721,7 +849,8 @@ class ManualRunnerTests(unittest.TestCase):
             request_timeout=30,
             max_retry_seconds=0,
             model_deployment="judge",
-            behavior_threshold=4,
+            rubric_threshold=0.75,
+            behavior_threshold=None,
             poll_interval=1,
             timeout=60,
             dataset_name="manual-test",
@@ -837,7 +966,7 @@ class ManualRunnerTests(unittest.TestCase):
                 completed_run("run-policy"),
             ]
             client.evals.runs.output_items.list.side_effect = [
-                [scored_item("test", ("behavioral_adherence",))],
+                [rubric_item()],
                 [
                     scored_item(
                         "test",
@@ -887,9 +1016,11 @@ class ManualRunnerTests(unittest.TestCase):
             )
             self.assertFalse(uploaded_path.exists())
             self.assertEqual(client.evals.create.call_count, 2)
+            requested = project.evaluators.create_version.call_args.kwargs
+            definition = requested["evaluator_version"]["definition"]
+            self.assertEqual(definition["type"], "rubric")
             self.assertEqual(
-                project.evaluators.create_version.call_args.kwargs["headers"],
-                {"Foundry-Features": "Evaluations=V1Preview"},
+                summary["hr_score_format"], "native_weighted_rubric_0_to_1"
             )
 
 
@@ -905,11 +1036,9 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 "status": "incomplete",
                 "response_collection": "completed",
                 "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-                "rubric_sha256": hashlib.sha256(
-                    foundry.BEHAVIOR_PROMPT.encode()
-                ).hexdigest(),
+                "rubric_sha256": foundry.rubric_fingerprint(args.rubric_threshold),
                 "judge_deployment": args.model_deployment,
-                "behavior_threshold": args.behavior_threshold,
+                "rubric_threshold": args.rubric_threshold,
                 "project_endpoint": args.project_endpoint,
                 "case_checks": [{"case_id": "test", "status": "passed"}],
                 "results": [cases.evaluation_row(case, agent_result())],
@@ -1028,7 +1157,7 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 "project_endpoint": "https://example.test",
                 "dataset_name": "answers",
                 "evaluation_name": "quality",
-                "settings": foundry.EvaluationSettings("judge", 4, 1, 60),
+                "settings": foundry.EvaluationSettings("judge", 0.75, 1, 60),
                 "credential": Mock(),
                 "dataset_path": dataset_path,
                 "summary": summary,
@@ -1081,7 +1210,7 @@ class CapturedBenchmarkTests(unittest.TestCase):
                     project_endpoint="https://example.test",
                     dataset_name="answers",
                     evaluation_name="quality",
-                    settings=foundry.EvaluationSettings("judge", 4, 1, 60),
+                    settings=foundry.EvaluationSettings("judge", 0.75, 1, 60),
                     credential=Mock(),
                     dataset_path=dataset_path,
                     summary=summary,

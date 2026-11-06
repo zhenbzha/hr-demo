@@ -26,7 +26,11 @@ from azure.core.credentials import TokenCredential
 from azure.identity import AzureCliCredential, get_bearer_token_provider
 from evaluation.agent import AgentResult
 from evaluation.cases import evaluation_row, load_cases, validate_case_result
-from evaluation.foundry import BEHAVIOR_PROMPT, EvaluationSettings
+from evaluation.foundry import (
+    DEFAULT_RUBRIC_THRESHOLD,
+    EvaluationSettings,
+    rubric_fingerprint,
+)
 from evaluation.runner import (
     captured_dataset_rows,
     check_evaluation_sdk,
@@ -61,7 +65,10 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME")
         or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME"),
     )
-    parser.add_argument("--behavior-threshold", type=float, default=4)
+    parser.add_argument(
+        "--rubric-threshold", type=float, default=DEFAULT_RUBRIC_THRESHOLD,
+        help="Native HR rubric passing score, 0-1. Default: 0.75.",
+    )
     parser.add_argument("--poll-interval", type=float, default=10)
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--request-timeout", type=float, default=300)
@@ -84,10 +91,10 @@ def parse_args() -> argparse.Namespace:
         if not math.isfinite(value) or value <= 0:
             parser.error(f"{name} must be finite and positive")
     if (
-        not math.isfinite(args.behavior_threshold)
-        or not 1 <= args.behavior_threshold <= 5
+        not math.isfinite(args.rubric_threshold)
+        or not 0 <= args.rubric_threshold <= 1
     ):
-        parser.error("behavior_threshold must be between 1 and 5")
+        parser.error("rubric_threshold must be between 0 and 1")
     if not args.cases.is_file():
         parser.error(f"Cases file does not exist: {args.cases}")
     if args.evaluation_python is not None and not args.evaluation_python.is_file():
@@ -326,8 +333,8 @@ def evaluation_command(args: argparse.Namespace, project_endpoint: str) -> list[
         "ask-hr-pipeline-benchmark",
         "--evaluation-name",
         args.label,
-        "--behavior-threshold",
-        str(args.behavior_threshold),
+        "--rubric-threshold",
+        str(args.rubric_threshold),
         "--poll-interval",
         str(args.poll_interval),
         "--timeout",
@@ -432,10 +439,10 @@ async def main_async(args: argparse.Namespace) -> None:
         "started_at": datetime.now(UTC).isoformat(),
         "dataset_version": datetime.now(UTC).strftime("%Y%m%d-%H%M%S"),
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-        "rubric_sha256": hashlib.sha256(BEHAVIOR_PROMPT.encode()).hexdigest(),
+        "rubric_sha256": rubric_fingerprint(args.rubric_threshold),
         "judge_deployment": args.judge_model_deployment,
         "project_endpoint": project_endpoint,
-        "behavior_threshold": args.behavior_threshold,
+        "rubric_threshold": args.rubric_threshold,
         "execution_scope": (
             "Local production classification, live authorized Foundry IQ retrieval, "
             "and answer generation; excludes hosted HTTP transport and PDF rendering."
@@ -492,7 +499,7 @@ async def main_async(args: argparse.Namespace) -> None:
             summary["completed_at"] = datetime.now(UTC).isoformat()
             if args.require_behavior_pass and (
                 summary["failed"]
-                or summary["quality"]["behavioral_adherence"]["failed"]
+                or summary["quality"]["hr_rubric"]["failed"]
             ):
                 raise RuntimeError(
                     "Some agent requirements failed; see the benchmark report"
@@ -524,7 +531,7 @@ def score_collected_rows(
             evaluation_name=args.label,
             settings=EvaluationSettings(
                 args.judge_model_deployment,
-                args.behavior_threshold,
+                args.rubric_threshold,
                 args.poll_interval,
                 args.timeout,
             ),
