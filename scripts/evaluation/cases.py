@@ -9,12 +9,14 @@ from typing import Any
 
 from .agent import AgentResult, captured_response_items
 
-LIST_FIELDS = {
+LEGACY_ASSERTION_FIELDS = {
     "expectedBehavior",
     "assertions",
-    "expectedDocumentIds",
     "expectedPrimaryDocumentIds",
     "expectedSupportingDocumentIds",
+}
+LIST_FIELDS = {
+    "expectedDocumentIds",
     "forbiddenRegions",
     "forbiddenDocumentIds",
     "allowedCitationRegions",
@@ -58,7 +60,16 @@ class CaseChecks:
 
 
 def _validate_case(case: Any, *, historical: bool = False) -> None:
-    allowed = CASE_FIELDS | LEGACY_EXECUTION_FIELDS if historical else CASE_FIELDS
+    if not historical and isinstance(case, dict) and case.keys() & LEGACY_ASSERTION_FIELDS:
+        raise ValueError(
+            "Native demo cases cannot declare unscored free-text assertions or "
+            "primary/supporting evidence roles; use the fixed rubric, PDF references "
+            "and expectedDocumentIds. Historical replay retains these fields."
+        )
+    allowed = (
+        CASE_FIELDS | LEGACY_ASSERTION_FIELDS | LEGACY_EXECUTION_FIELDS
+        if historical else CASE_FIELDS
+    )
     if not isinstance(case, dict) or case.keys() - allowed:
         raise ValueError("Evaluation case contains unknown/unsupported fields")
     for name in ("id", "query"):
@@ -66,7 +77,7 @@ def _validate_case(case: Any, *, historical: bool = False) -> None:
             raise ValueError(f"Case {name} must be a nonempty string")
     if type(case.get("hardRequirement")) is not bool:
         raise ValueError(f"{case['id']}: hardRequirement must be a boolean")
-    for name in LIST_FIELDS & case.keys():
+    for name in (LIST_FIELDS | LEGACY_ASSERTION_FIELDS) & case.keys():
         if not isinstance(case[name], list) or any(
             not isinstance(value, str) or not value.strip() for value in case[name]
         ):
@@ -89,10 +100,13 @@ def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
     path : pathlib.Path
         JSON file with a top-level ``cases`` array. Each case requires
         ``id``, ``query``, and a boolean ``hardRequirement``. Optional
-        expectations name source IDs, citation fields, regions, or behavior.
+        expectations name source IDs, citation fields, or regions. Native
+        cases cannot declare free-text assertions or primary/supporting roles
+        that the deterministic checks do not verify.
     historical : bool, default=False
-        Allow retired execution fields when reading hash-bound historical
-        cases for reference replay. These fields are not evaluated.
+        Allow free-text assertions and evidence-role fields for the recorded
+        prompt evaluator, plus retired execution fields for capture integrity.
+        Retired execution fields are not evaluated.
 
     Returns
     -------
@@ -122,7 +136,7 @@ def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
 
 def expected_behavior(case: dict[str, Any]) -> str:
     """
-    Describe how an answer should satisfy the case's requirements.
+    Preserve case expectations for capture integrity and historical replay.
 
     Parameters
     ----------
@@ -133,8 +147,9 @@ def expected_behavior(case: dict[str, Any]) -> str:
     Returns
     -------
     str
-        Instructions for the HR behavior evaluator, covering the answer,
-        required sources, and citations.
+        Historical prompt-evaluator instructions or native citation metadata.
+        The native rubric does not consume this field; its scoring requirements
+        are defined in the registered rubric and separate citation checks.
     """
     instructions = [*case.get("expectedBehavior", []), *case.get("assertions", [])]
     for key, label in (

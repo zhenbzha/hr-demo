@@ -18,6 +18,7 @@ from openai.types.eval_create_params import DataSourceConfigCustom
 
 from .agent import build_captured_agent_query, captured_response_items
 from .foundry import (
+    MIN_RUBRIC_DIMENSION_SCORE,
     EvaluationSettings,
     behavior_criterion,
     built_in_criteria,
@@ -25,6 +26,7 @@ from .foundry import (
     dataset_schema,
     evaluation_summary,
     policy_answer_criteria,
+    rubric_assessment,
     rubric_criterion,
     rubric_definition,
     rubric_fingerprint,
@@ -383,14 +385,19 @@ def score_dataset(
         Enable the PDF-reference profile for this predeclared subset of cases.
         All cases receive HR behavior scoring; only this subset receives
         Groundedness and Response Completeness. None preserves the legacy
-        diagnostic profile used by benchmark/replay callers.
+        diagnostic profile used by benchmark callers.
     """
     definition = rubric_definition(settings.pass_threshold)
     fingerprint = rubric_fingerprint(settings.pass_threshold)
     if summary.get("rubric_sha256", fingerprint) != fingerprint:
         raise ValueError("Scoring rubric differs from the declared native definition")
+    if summary.get(
+        "rubric_minimum_dimension_score", MIN_RUBRIC_DIMENSION_SCORE
+    ) != MIN_RUBRIC_DIMENSION_SCORE:
+        raise ValueError("Scoring dimension floor differs from the declared demo policy")
     summary["rubric_sha256"] = fingerprint
     summary["rubric_threshold"] = settings.pass_threshold
+    summary["rubric_minimum_dimension_score"] = MIN_RUBRIC_DIMENSION_SCORE
     summary["rubric_definition"] = definition
     summary["hr_score_format"] = "native_weighted_rubric_0_to_1"
     inline_rows = None
@@ -426,13 +433,18 @@ def score_dataset(
                 row["case_id"] in policy_case_ids
             ):
                 raise ValueError("Reference answers do not match the declared policy cases")
-        summary["evaluation_profile"] = "pdf_reference_native_rubric_v1"
+        summary["evaluation_profile"] = "pdf_reference_native_demo_v2"
         summary["evaluation_plan"] = {
             "behavior_case_ids": sorted(case_ids),
             "policy_answer_case_ids": sorted(policy_case_ids),
             "clarification_or_no_policy_case_ids": sorted(case_ids - policy_case_ids),
             "scope_basis": (
                 "Selected from test expectations before grading, not from answers or scores."
+            ),
+            "scored_contract": (
+                "Fixed native rubric with a dimension-score floor, deterministic "
+                "citation checks, and applicable PDF-reference metrics. No per-case "
+                "free-text assertion evaluator or internal execution verification."
             ),
         }
     summary["scoring_sdk_versions"] = {
@@ -508,6 +520,8 @@ def score_dataset(
             inline_rows=inline_rows,
             schema=schema,
         )
+        summary["rubric_assessment"] = rubric_assessment(summary["expected_behavior"])
+        write_summary(summary_path, summary)
         if policy_case_ids is not None:
             if policy_case_ids:
                 run_stage(
@@ -528,15 +542,44 @@ def score_dataset(
             write_summary(summary_path, summary)
 
 
-def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
+def require_demo_pass(summary: dict[str, Any]) -> None:
     """
-    Combine the declared HR requirements without a generic-metric intersection.
+    Require the completed report's native demo checks to pass.
 
     Parameters
     ----------
     summary : dict
-        Completed PDF-reference stages, their predeclared case plan, and
-        citation checks. Scoring-stage coverage must already be validated.
+        Completed report with ``case_checks`` and ``rubric_assessment``.
+        Hosted reports also contain a combined ``assessment`` covering the
+        applicable policy-answer checks; that assessment must pass too.
+        Call only when the caller's optional pass gate is enabled.
+
+    Raises
+    ------
+    RuntimeError
+        Citation checks or an application assessment failed. Raw Foundry
+        results and application assessments are not modified.
+    """
+    if any(case["status"] != "passed" for case in summary["case_checks"]):
+        raise RuntimeError(
+            "Some answer/citation requirements failed; see the evaluation results"
+        )
+    if summary["rubric_assessment"]["failed"] or (
+        "assessment" in summary and summary["assessment"]["failed"]
+    ):
+        raise RuntimeError("Some native demo checks failed; see the application assessment")
+
+
+def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
+    """
+    Combine the limited native demo checks, not arbitrary HR assertions.
+
+    Parameters
+    ----------
+    summary : dict
+        Completed PDF-reference stages, application ``rubric_assessment``,
+        predeclared case plan, and citation checks. Scoring-stage coverage
+        must already be validated.
 
     Returns
     -------
@@ -553,7 +596,7 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
     expected_ids = set(plan["behavior_case_ids"])
     policy_ids = set(plan["policy_answer_case_ids"])
     checks = summary["case_checks"]
-    behavior = summary["expected_behavior"]["cases"]
+    behavior = summary["rubric_assessment"]["cases"]
     policy = summary.get("policy_answers", {}).get("cases", [])
     for items, expected in (
         (checks, expected_ids), (behavior, expected_ids), (policy, policy_ids),
@@ -565,7 +608,9 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
         item["case_id"]: [] if item["status"] == "passed" else ["citation_checks"]
         for item in checks
     }
-    for case in behavior + policy:
+    for case in behavior:
+        failures[case["case_id"]].extend(case["failed_requirements"])
+    for case in policy:
         failures[case["case_id"]].extend(
             result["name"] for result in case["results"] if result["passed"] is not True
         )
@@ -582,9 +627,10 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
     ]
     return {
         "definition": (
-            "HR behavior and citations for every case; policy answers also require "
-            "Groundedness and Response Completeness. Not comparable to the old "
-            "all-generic-metrics intersection."
+            "Limited native demo acceptance: fixed rubric plus per-dimension floor "
+            "and citation checks; policy answers also require Groundedness and "
+            "Response Completeness. Not exhaustive HR verification or evaluation "
+            "of per-case free-text assertions."
         ),
         "passed": sum(case["passed"] for case in results),
         "failed": sum(not case["passed"] for case in results),

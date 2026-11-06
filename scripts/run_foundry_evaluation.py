@@ -25,6 +25,7 @@ from evaluation.cases import (
 )
 from evaluation.foundry import (
     DEFAULT_RUBRIC_THRESHOLD,
+    MIN_RUBRIC_DIMENSION_SCORE,
     EvaluationSettings,
     rubric_fingerprint,
 )
@@ -33,6 +34,7 @@ from evaluation.replay import compare_reference_judgments, load_reference_replay
 from evaluation.runner import (
     captured_dataset_rows,
     check_evaluation_sdk,
+    require_demo_pass,
     score_dataset,
     score_reference_rows,
     write_summary,
@@ -204,8 +206,8 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Fail on citation, HR behavior, or applicable policy-answer failures. "
-            "Default: manual review."
+            "Native runs: require citation checks, a native rubric pass, every "
+            "dimension >= 3, and applicable policy-answer checks. Default: manual review."
         ),
     )
     parser.add_argument(
@@ -272,49 +274,6 @@ def collect_responses(
     return rows
 
 
-def enforce_optional_pass_requirement(
-    args: argparse.Namespace, summary: dict[str, Any]
-) -> None:
-    """
-    Raise an error if required quality checks did not pass.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        CLI settings; ``require_behavior_pass`` enables the gate.
-    summary : dict
-        Report containing rule-based checks (``case_checks``) and
-        HR behavior scores (``expected_behavior``). The PDF-reference profile
-        also includes policy-answer scores (``policy_answers``).
-
-    Raises
-    ------
-    RuntimeError
-        The gate is enabled and any deterministic check is
-        failed, or any expected-behavior judgment fails.
-        With the gate disabled, low scores remain diagnostic results.
-    """
-    if not args.require_behavior_pass:
-        return
-    if any(case["status"] != "passed" for case in summary["case_checks"]):
-        raise RuntimeError(
-            "Some answer/citation requirements failed; see the evaluation results"
-        )
-    results = summary["expected_behavior"]["cases"]
-    if any(not result["passed"] for case in results for result in case["results"]):
-        raise RuntimeError(
-            "Expected-behavior scores did not meet the configured threshold"
-        )
-    if any(
-        not result["passed"]
-        for case in summary.get("policy_answers", {}).get("cases", [])
-        for result in case["results"]
-    ):
-        raise RuntimeError(
-            "Policy-answer scores did not meet the built-in thresholds"
-        )
-
-
 def score_benchmark_report(args: argparse.Namespace) -> None:
     """
     Validate a saved benchmark and score its captured answers with Foundry.
@@ -338,6 +297,7 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
         "rubric_sha256": rubric_fingerprint(args.rubric_threshold),
         "judge_deployment": args.model_deployment,
         "rubric_threshold": args.rubric_threshold,
+        "rubric_minimum_dimension_score": MIN_RUBRIC_DIMENSION_SCORE,
         "project_endpoint": args.project_endpoint,
     }
     if (
@@ -391,7 +351,8 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
                 agent_inputs=True,
             )
             summary["scoring_complete"] = True
-            enforce_optional_pass_requirement(args, summary)
+            if args.require_behavior_pass:
+                require_demo_pass(summary)
     finally:
         write_summary(args.benchmark_report, summary)
     print(f"Scored captured benchmark: {args.benchmark_report}")
@@ -509,6 +470,7 @@ def main() -> None:
         "rubric_sha256": rubric_fingerprint(args.rubric_threshold),
         "judge_deployment": args.model_deployment,
         "rubric_threshold": args.rubric_threshold,
+        "rubric_minimum_dimension_score": MIN_RUBRIC_DIMENSION_SCORE,
         "reference_answers": references.provenance,
         "agent": {
             "name": args.agent_name,
@@ -552,13 +514,14 @@ def main() -> None:
                 policy_case_ids=set(references.answers),
             )
             summary["status"] = "completed"
-            enforce_optional_pass_requirement(args, summary)
+            if args.require_behavior_pass:
+                require_demo_pass(summary)
     finally:
         write_summary(summary_path, summary)
     print(f"Evaluation report: {summary_path}")
     assessment = summary["assessment"]
     print(
-        f"HR requirements: {assessment['passed']} passed, "
+        f"Native demo checks: {assessment['passed']} passed, "
         f"{assessment['failed']} failed (PDF-reference profile)."
     )
 

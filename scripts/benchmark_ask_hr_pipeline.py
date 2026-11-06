@@ -28,12 +28,14 @@ from evaluation.agent import AgentResult
 from evaluation.cases import evaluation_row, load_cases, validate_case_result
 from evaluation.foundry import (
     DEFAULT_RUBRIC_THRESHOLD,
+    MIN_RUBRIC_DIMENSION_SCORE,
     EvaluationSettings,
     rubric_fingerprint,
 )
 from evaluation.runner import (
     captured_dataset_rows,
     check_evaluation_sdk,
+    require_demo_pass,
     score_dataset,
     write_summary,
 )
@@ -81,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         "--require-behavior-pass",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Fail on low HR behavior scores or failed citation checks.",
+        help="Require citation checks, a native rubric pass, and every dimension >= 3.",
     )
     args = parser.parse_args()
     if not args.judge_model_deployment:
@@ -443,6 +445,7 @@ async def main_async(args: argparse.Namespace) -> None:
         "judge_deployment": args.judge_model_deployment,
         "project_endpoint": project_endpoint,
         "rubric_threshold": args.rubric_threshold,
+        "rubric_minimum_dimension_score": MIN_RUBRIC_DIMENSION_SCORE,
         "execution_scope": (
             "Local production classification, live authorized Foundry IQ retrieval, "
             "and answer generation; excludes hosted HTTP transport and PDF rendering."
@@ -497,13 +500,8 @@ async def main_async(args: argparse.Namespace) -> None:
             summary["quality"] = quality_summary(summary)
             summary["status"] = "completed"
             summary["completed_at"] = datetime.now(UTC).isoformat()
-            if args.require_behavior_pass and (
-                summary["failed"]
-                or summary["quality"]["hr_rubric"]["failed"]
-            ):
-                raise RuntimeError(
-                    "Some agent requirements failed; see the benchmark report"
-                )
+            if args.require_behavior_pass:
+                require_demo_pass(summary)
     finally:
         write_summary(args.output, summary)
     print(f"Performance and agent evaluation report: {args.output}")

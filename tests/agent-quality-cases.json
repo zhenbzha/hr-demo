@@ -1,16 +1,13 @@
 {
   "runWhen": "After the Ask HR hosted agent and retrieval orchestration are implemented",
-  "hardPassRule": "Every case marked hardRequirement must pass before deployment.",
+  "hardPassRule": "Selected cases must pass the documented native demo assessment when the optional gate is enabled; this is not exhaustive HR verification.",
+  "assessmentScope": "Fixed native rubric, a minimum score per dimension, deterministic citation checks, and PDF-reference metrics for policy answers. No per-case free-text assertions or primary/supporting evidence-role checks.",
   "cases": [
     {
       "id": "AGENT-REGION-CLARIFY",
       "hardRequirement": true,
       "expectedCitationCount": 0,
-      "query": "How much annual leave do I receive?",
-      "expectedBehavior": [
-        "Ask which employment region applies.",
-        "Do not provide a regional entitlement."
-      ]
+      "query": "How much annual leave do I receive?"
     },
     {
       "id": "AGENT-REGION-TYPO",
@@ -25,23 +22,14 @@
       "hardRequirement": true,
       "query": "How much annual leave do employees receive in Finland?",
       "allowedCitationRegions": ["finland", "global"],
-      "expectedPrimaryDocumentIds": ["6d18bb8e-1078-54ee-b224-301b9a17716a"],
-      "assertions": [
-        "The Finland policy supplies the entitlement.",
-        "Global evidence may provide context but must not override the Finland policy.",
-        "Any conflict is resolved in favor of the Finland policy."
-      ]
+      "expectedDocumentIds": ["6d18bb8e-1078-54ee-b224-301b9a17716a"]
     },
     {
       "id": "AGENT-GLOBAL-SUPPLEMENT",
       "hardRequirement": true,
       "query": "What responsible AI rules apply to employees in India?",
       "allowedCitationRegions": ["india", "global"],
-      "expectedSupportingDocumentIds": ["2ee3c73f-6257-5a27-9dfc-f121b7238b17"],
-      "assertions": [
-        "Global evidence can answer a topic not covered by the local document set.",
-        "The answer clearly labels the evidence as a Global baseline."
-      ]
+      "expectedDocumentIds": ["2ee3c73f-6257-5a27-9dfc-f121b7238b17"]
     },
     {
       "id": "AGENT-EXPLICIT-COMPARISON",
@@ -55,32 +43,19 @@
       "id": "AGENT-MULTILINGUAL-FI",
       "hardRequirement": true,
       "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
-      "expectedDocumentIds": ["376b6ef8-695f-593e-922b-8edbb78225a8"],
-      "assertions": [
-        "The answer is grounded in the original Finnish policy text.",
-        "The answer preserves a citation to the Finnish document and pages."
-      ]
+      "expectedDocumentIds": ["376b6ef8-695f-593e-922b-8edbb78225a8"]
     },
     {
       "id": "AGENT-MULTILINGUAL-HK",
       "hardRequirement": true,
       "query": "香港僱員有多少天年假？",
-      "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"],
-      "assertions": [
-        "The answer is grounded in the original Traditional Chinese policy text.",
-        "The answer preserves a citation to the Hong Kong document and pages."
-      ]
+      "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"]
     },
     {
       "id": "AGENT-NO-EVIDENCE",
       "hardRequirement": true,
       "expectedCitationCount": 0,
-      "query": "What company policy covers private aircraft maintenance reimbursement in Finland?",
-      "expectedBehavior": [
-        "State in employee-facing language that the available policy does not cover the request.",
-        "Do not invent a policy or entitlement.",
-        "Do not cite an unrelated document."
-      ]
+      "query": "What company policy covers private aircraft maintenance reimbursement in Finland?"
     },
     {
       "id": "AGENT-CITATIONS",
@@ -104,12 +79,7 @@
       "workbookRefs": ["ACT-011"],
       "hardRequirement": true,
       "expectedCitationCount": 0,
-      "query": "Which countries are currently included in the EEM region?",
-      "expectedBehavior": [
-        "Do not invent a country list.",
-        "Ask which supported employment region applies.",
-        "Do not cite an unrelated regional policy."
-      ]
+      "query": "Which countries are currently included in the EEM region?"
     },
     {
       "id": "AGENT-FI-TIME-ATTENDANCE",
@@ -124,11 +94,7 @@
       "workbookRefs": ["ACT-017"],
       "hardRequirement": true,
       "query": "When is salary paid in Finland and what benefits are included?",
-      "expectedDocumentIds": ["4ba28ebb-0e89-5fee-a916-7c4adf950774"],
-      "assertions": [
-        "The answer is grounded in the Finland payroll and benefits policy.",
-        "The answer does not invent a Workday process or unrelated payslip link."
-      ]
+      "expectedDocumentIds": ["4ba28ebb-0e89-5fee-a916-7c4adf950774"]
     },
     {
       "id": "AGENT-UNSUPPORTED-UK",
@@ -136,11 +102,6 @@
       "hardRequirement": true,
       "expectedCitationCount": 0,
       "query": "What compensation policy applies to employees in the UK?",
-      "expectedBehavior": [
-        "Recognize that the query asks about the United Kingdom.",
-        "State that no active UK policy is available.",
-        "Do not return Finland, India, or Hong Kong policy as a UK answer."
-      ],
       "forbiddenRegions": ["finland", "india", "hongkong"]
     },
     {
@@ -148,12 +109,7 @@
       "workbookRefs": ["ACT-007"],
       "hardRequirement": true,
       "query": "What is the target timeline for completing an India POSH inquiry?",
-      "expectedDocumentIds": ["e9fce922-856c-55f0-bbd0-d08012025694"],
-      "assertions": [
-        "The deadline is taken verbatim from the retrieved policy.",
-        "The answer includes the supporting document and page citation.",
-        "The model does not calculate or invent a different deadline."
-      ]
+      "expectedDocumentIds": ["e9fce922-856c-55f0-bbd0-d08012025694"]
     },
     {
       "id": "AGENT-PERFORMANCE-GUIDE",
@@ -161,22 +117,14 @@
       "hardRequirement": true,
       "query": "How does Contoso handle performance improvement and employee development for employees in Finland?",
       "allowedCitationRegions": ["finland", "global"],
-      "expectedDocumentIds": ["2ee3c73f-6257-5a27-9dfc-f121b7238b17"],
-      "assertions": [
-        "The answer cites the Global handbook.",
-        "The answer uses the performance, learning, and career-growth section."
-      ]
+      "expectedDocumentIds": ["2ee3c73f-6257-5a27-9dfc-f121b7238b17"]
     },
     {
       "id": "AGENT-REGION-LABEL",
       "workbookRefs": ["ACT-046"],
       "hardRequirement": true,
       "query": "What is the maternity leave policy in Hong Kong?",
-      "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"],
-      "assertions": [
-        "The response explicitly labels the entitlement as Hong Kong policy.",
-        "Any Global evidence is separately labelled as Global baseline context."
-      ]
+      "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"]
     },
     {
       "id": "AGENT-HK-ANNUAL-LEAVE",
@@ -188,10 +136,6 @@
         "3abd5ea4-1541-54ba-9d44-b34556d2bdda",
         "01951b29-ccd6-58b2-98ba-15ce60f5753d",
         "7e3c65fb-ca4f-51a2-9353-3840e88a9bdb"
-      ],
-      "assertions": [
-        "The answer states 14 paid working days.",
-        "The answer is grounded in the Hong Kong leave policy."
       ]
     }
   ]

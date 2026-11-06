@@ -408,14 +408,16 @@ of generic relevance, intent-resolution, coherence and groundedness scores:
 
 | Scope | Checks |
 |---|---|
-| All 17 cases | Native weighted HR rubric and existing citation checks |
+| All 17 cases | Native HR rubric, application dimension-score floor, and deterministic citation checks |
 | 13 policy-answer cases | Built-in Groundedness and Response Completeness |
-| Four cases explicitly expecting zero citations | Their existing clarification/no-policy requirements, without demanding an invented policy answer |
+| Four cases explicitly expecting zero citations | Fixed rubric's clarification/no-policy checks and zero citations; no invented policy reference answer |
 
 Scope is determined from the test expectations **before grading**, never from
 whether an answer retrieved evidence or passed a metric. A missing or incomplete
 policy answer cannot escape policy-answer scoring. A clarification/no-policy
-case must still pass its HR and citation checks.
+case must still pass the rubric, its dimension-score floor, and citation checks.
+These are deliberately limited demo checks, not a guarantee of every
+scenario-specific requirement or overall HR correctness.
 
 `--references` defaults to `tests\agent-quality-references.json`. This file
 contains independently PDF-derived expected answers, source PDF hashes,
@@ -426,13 +428,16 @@ independently adjudicated by an HR expert; review them before using this suite
 as a customer acceptance gate. Do not copy model answers into the references
 or revise references merely to make a run pass. When sharing a smaller corpus,
 curate matching cases, reference answers, and source entries.
+The loader validates hashes and manifest coverage, not whether every quotation
+occurs on its stated page. Those quotes were source-checked for the frozen demo
+references; repeat that source review if references change.
 
 The script captures answers and citations, retains the complete evaluation
 dataset, and submits inline rows using the official SDK pattern. The uploaded
 dataset records all 17 cases; the policy-answer run receives the predeclared
 13-case subset. Groundedness receives the unchanged question, answer text and
-cited policy context, along with recorded tool definitions (empty when
-unavailable), as required by the SDK sample's inline-data mapping.
+cited policy context, with `tool_definitions: []`, following the SDK sample's
+inline-data mapping. Hosted collection does not capture tool definitions.
 Response Completeness receives the independent
 `ground_truth` and unchanged answer text. This follows
 [Microsoft's RAG evaluator guidance](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rag-evaluators)
@@ -459,7 +464,7 @@ The following adaptations have specific HR/application requirements:
 |---|---|
 | Collect responses with the existing authenticated caller | Ask HR requires represented-user and delegated Search authorization headers. The generic agent-target sample does not supply these headers. |
 | Use the HR behavior rubric, with policy-grounding and reference-completeness checks | Answers must follow the supplied fictional policies, local/Global precedence, and appropriate clarification or abstention. [Microsoft's agent-evaluation guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent) recommends an agent-specific rubric as the primary measure. |
-| Check returned citation IDs, regions, and page fields | The demo requires answers to cite the correct policy and physical pages; these are directly observable response requirements. |
+| Check returned citation IDs, regions, and page fields | Verifies required document membership, allowed/forbidden sources, citation counts, required fields and valid page ranges; it does not verify that cited text occurs on those pages. |
 
 The HR grader is a native `EvaluatorDefinitionType.RUBRIC` evaluator, registered
 and version-pinned using the
@@ -471,15 +476,38 @@ Completeness. The fixed, always-applicable dimensions are:
 |---|---:|
 | HR request handling, including correct clarification/no-policy responses | 10 |
 | Policy scope and evidence, including local/Global precedence | 5 |
-| General answer quality, including the employee's language | 2 |
+| Communication quality, including the employee's language (`communication_quality`) | 2 |
 
 These dimensions, weights, and the 0.75 threshold are application choices, not
 Microsoft defaults. Foundry scores each dimension from 1 to 5 and returns the
 normalized weighted result: `(weighted mean - 1) / 4`. A dimension scored 1
-fails the rubric regardless of the aggregate. The rubric definition and its hash,
+fails the rubric regardless of the aggregate. This arithmetic follows the
+[SDK's `RubricBasedEvaluatorDefinition.pass_threshold` contract](https://learn.microsoft.com/en-us/python/api/azure-ai-projects/azure.ai.projects.models.rubricbasedevaluatordefinition?view=azure-python)
+which states that the default 0.5 corresponds to a raw weighted average of 3.0.
+The worked examples on the
+[Learn rubric page](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rubric-evaluators)
+appear to use a different normalization; that discrepancy is unresolved.
+The rubric definition and its hash,
 registered version, per-dimension scores, weights, and explanations are retained.
 The new metric is named `hr_rubric`, on a 0-1 scale; it is **not directly
 comparable** to the old holistic `behavioral_adherence` score.
+
+**Application acceptance** additionally requires every dimension to score at
+least 3/5. For example, scores `(5, 2, 5)` yield a native score of approximately
+0.779 and a native pass, but fail the demo's application assessment. A dimension
+graded 2 or lower cannot be offset by stronger dimensions. Scores of 3 can
+still pass: `(5, 3, 3)` yields approximately 0.794 and meets both acceptance
+rules. This is an application rule, not a Foundry default or a service execution
+error; the raw native score and `passed` flag are preserved.
+
+The application-defined dimension was renamed to `communication_quality` to
+avoid redefining the SDK's reserved residual `general_quality`. A one-row live
+probe on 2026-11-06 verified the exact definition: the service preserved all
+three dimension IDs, descriptions and weights, and returned no additional
+residual dimension. The synthetic clarification answer scored `(5, 5, 5)` and
+passed both native and application acceptance. This is a compatibility check,
+not an agent-quality result. Unexpected dimensions still fail validation
+rather than silently changing the score.
 
 The exact-deadline wording requirement applies to deadline-specific questions,
 not every date mentioned in a broader process or benefits answer. This preserves
@@ -487,11 +515,20 @@ the existing operative-deadline case without adding quotation requirements to
 the other cases.
 
 The native evaluator receives the actual question (the recorded conversation for
-local benchmarks), structured response items, and recorded tool definitions.
+local benchmarks), structured response items, and `tool_definitions: []`.
 It does not consume arbitrary `expected_behavior` or reference-answer fields:
-the fixed dimension descriptions encode the common HR requirements, so review
-them when adding new case requirements. Separate citation checks and the
-PDF-reference evaluators retain their own case-specific inputs.
+the fixed dimension descriptions include HR quality checks and rules derived
+from these demo cases, including EEM/UK handling, the supported region list,
+and exact operative-deadline wording. They are not a general-purpose HR rubric.
+Active cases therefore reject `expectedBehavior`, `assertions`,
+`expectedPrimaryDocumentIds` and `expectedSupportingDocumentIds`.
+`expectedDocumentIds` checks membership,
+not primary/supporting use. There is no separate per-case semantic assertion
+grader: a particular region label or use of a named handbook section is not
+individually guaranteed. Separate citation checks and the PDF-reference
+evaluators retain their own case-specific inputs. The dataset's
+`expected_behavior` field remains capture metadata and a historical replay
+input, not a native rubric input.
 Supplied fictional policy, not external employment law, is authoritative.
 The citation transport is not a Search tool execution record, so the sample's
 tool-execution evaluator is not added merely to score that transport.
@@ -499,15 +536,17 @@ tool-execution evaluator is not added merely to score that transport.
 The default is a **manual diagnostic report**, not an automatic pass gate.
 Citation checks return `passed` or `failed`. There are no internal classifier or
 retrieval-execution assertions, custom response-diagnostics contract, or
-Application Insights dependency. The test cases contain only answer/citation
-expectations. No agent response fields, tracing configuration, or deployment
+Application Insights dependency. Active cases retain questions and supported
+deterministic citation expectations; policy answers come from the separate
+reference manifest. No agent response fields, tracing configuration, or deployment
 are changed by this evaluation script.
 
 Null, non-finite, missing, duplicate, or inconsistent evaluation scores are
 errors even when Foundry marks a run completed. These errors fail the command
 and leave a partial report. Ordinary low scores remain visible for manual
 review. `--require-behavior-pass` optionally enforces the configured
-native rubric threshold and rejects failed citation checks and applicable
+native rubric threshold, the minimum score of 3 in every dimension, and
+rejects failed citation checks and applicable
 policy-answer scores. `--rubric-threshold` defaults to 0.75 (a weighted mean of
 4/5, but not the same grader as the historical holistic score); the built-in
 Groundedness and Response Completeness thresholds remain their defaults (3/5).
@@ -515,15 +554,17 @@ This gate also applies when rescoring saved responses with `--benchmark-report`;
 the completed scores remain in the report even when the gate fails.
 
 Reports include `evaluation_plan`, reference provenance, separate
-`expected_behavior` and `policy_answers` stages, and an `assessment` listing
-failed requirements for every case. The new assessment is **not comparable**
+`expected_behavior` (the retained native-stage name) and `policy_answers` stages,
+the independent `rubric_assessment`, and a combined `assessment` listing
+failed checks for every case. Native and application decisions are not
+interchanged. The new `pdf_reference_native_demo_v2` assessment is **not comparable**
 to the historical all-generic-metrics intersection. Historical reports are
 retained unchanged. New benchmark runs also use the native HR rubric while
 retaining their generic diagnostic metrics; historical reference replay keeps
 its recorded prompt evaluator. Generic scores must not be presented as overall
 HR correctness.
-When validating evaluator changes, keep positive and deliberately incorrect
-controls separate from agent results and retain their raw judge decisions.
+When validating evaluator changes, keep positive, deliberately incorrect and
+borderline controls separate from agent results and retain raw judge decisions.
 
 Reports are written under `.foundry\results`. The local JSONL dataset is
 temporary unless `--retain-dataset` is supplied. The dataset uploaded to
@@ -531,6 +572,51 @@ Foundry remains a remote artifact and follows that project's retention/access
 policies; deleting the temporary local file does not delete it from Foundry.
 Polling is bounded, with a cancellation request on timeout. There is no
 automatic rerun, optimization, or deployment.
+
+### Evaluation limitations
+
+The earlier **16/17** native-rubric result was obtained after revising the rubric
+using those same 17 cases. It is a calibration-set observation, not an independent
+holdout result. Its final summary reused unchanged policy-stage results and was
+assembled by session-only rescore/control tooling, not the committed CLI.
+Those historical artifacts remain unchanged and do not represent the current
+narrowed contract or dimension-score floor. Run the committed CLI freshly before
+publishing a result for this contract; a fresh run on the same cases is still
+not a holdout. Do not silently reuse old captures: case-file hashes and capture
+metadata must match.
+
+The fresh current-contract run on **2026-11-06** completed with **15/17 overall
+passes**, using native rubric version 4. All 17 answers and both scoring stages
+were newly generated through `scripts\run_foundry_evaluation.py`; an
+authentication-only launcher selected the target subscription without changing
+Azure CLI defaults. No previous answers or scoring stages were reused.
+
+| Check | Passed |
+|---|---:|
+| Native HR rubric | 15/17 |
+| Native pass plus dimension-score floor | 15/17 |
+| Citation checks | 17/17 |
+| Groundedness | 13/13 |
+| Response Completeness | 13/13 |
+| Combined demo assessment | 15/17 |
+
+`AGENT-FI-PAYROLL` scored 0.500: the rubric judged its treatment of Global
+baseline benefits as unconfirmed for Finland to be incomplete.
+`AGENT-OPERATIVE-DEADLINE` scored approximately 0.676: the correct 90-day target
+was paraphrased rather than quoting the required operative wording. Both fail
+the native threshold; no results were unscorable. The evaluator was not retuned
+to remove these failures, and the synthetic compatibility probe is outside the
+17-case denominator.
+
+The local report is
+`.foundry\results\evaluation-summary-20261106-141531.json`; the corresponding
+fresh dataset is `.foundry\datasets\evaluation-20261106-141531.jsonl`.
+These generated artifacts remain gitignored. This is still a demo calibration
+run, not an independent holdout or proof of production readiness.
+
+Hosted grading receives the employee question and captured response items;
+benchmark grading also receives the recorded generation conversation.
+Consequently their native rubric scores are not directly comparable.
 
 ### Saved-answer reference replay
 
@@ -712,7 +798,10 @@ pipeline timing. Answers failing deterministic checks are still scored and their
 latencies retained. A failed collection or incomplete/unscorable Foundry result
 leaves an explicitly incomplete report, never a successful latency-only result.
 Ordinary quality failures remain a manual report; `--require-behavior-pass`
-optionally makes them a failing exit status. The native `--rubric-threshold`
+optionally enforces citation checks and the application `rubric_assessment` as
+a failing exit status, including the minimum dimension score of 3/5. Raw
+`quality.hr_rubric` statistics still describe Foundry's decision, not application
+acceptance. The native `--rubric-threshold`
 defaults to 0.75 on the 0-1 scale; `--judge-model-deployment` can select a judge
 separately from generation.
 

@@ -31,6 +31,7 @@ from openai.types.evals.runs.output_item_list_response import Result
 
 RUBRIC_EVALUATOR_NAME = "ask_hr_quality_rubric"
 DEFAULT_RUBRIC_THRESHOLD = 0.75
+MIN_RUBRIC_DIMENSION_SCORE = 3
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 EvaluationRun = RunCreateResponse | RunRetrieveResponse
 RUBRIC_DIMENSIONS = (
@@ -83,7 +84,7 @@ RUBRIC_DIMENSIONS = (
         ),
     },
     {
-        "id": "general_quality",
+        "id": "communication_quality",
         "weight": 2,
         "always_applicable": True,
         "description": (
@@ -589,12 +590,12 @@ def _score_summary(result: Result) -> dict[str, Any]:
 
 
 def _validate_rubric_score(result: dict[str, Any], threshold: float | None) -> str | None:
-    value = result["score"]
+    value = result.get("score")
     if (
         type(value) not in (int, float)
         or not math.isfinite(value)
         or not 0 <= value <= 1
-        or type(result["passed"]) is not bool
+        or type(result.get("passed")) is not bool
     ):
         return "missing or invalid normalized rubric score"
     dimensions = result.get("dimension_scores")
@@ -681,6 +682,67 @@ def _validate_scores(
                 f"{case_id}/{result['name']}: pass flag disagrees with the configured threshold"
             )
     return errors
+
+
+def rubric_assessment(stage: dict[str, Any]) -> dict[str, Any]:
+    """
+    Apply the demo acceptance rule without changing Foundry's raw results.
+
+    Parameters
+    ----------
+    stage : dict
+        Validated native rubric stage returned by ``evaluation_summary``.
+        Each case must contain one ``hr_rubric`` result with dimension scores.
+
+    Returns
+    -------
+    dict
+        Application pass/fail per case: the native rubric must pass and every
+        dimension must score at least 3. A score of 2 denotes a serious defect
+        in this demo's anchors and cannot be offset by stronger dimensions.
+
+    Raises
+    ------
+    ValueError
+        Native results or their dimension scores are missing or malformed.
+    """
+    if not isinstance(stage.get("cases"), list) or not stage["cases"]:
+        raise ValueError("Rubric assessment requires scored cases")
+    cases = []
+    for case in stage["cases"]:
+        scores = case.get("results")
+        if (
+            not isinstance(scores, list)
+            or len(scores) != 1
+            or not isinstance(scores[0], dict)
+            or scores[0].get("name") != "hr_rubric"
+        ):
+            raise ValueError("Rubric assessment requires one native result per case")
+        result = scores[0]
+        if error := _validate_rubric_score(result, threshold=None):
+            raise ValueError(f"{case['case_id']}: {error}")
+        failures = [] if result["passed"] else ["hr_rubric"]
+        failures.extend(
+            f"hr_rubric.{dimension['id']}.minimum_score"
+            for dimension in result["dimension_scores"]
+            if dimension["score"] < MIN_RUBRIC_DIMENSION_SCORE
+        )
+        cases.append({
+            "case_id": case["case_id"],
+            "passed": not failures,
+            "failed_requirements": failures,
+        })
+    return {
+        "definition": (
+            "Application acceptance requires the native rubric to pass and every "
+            "dimension to meet the minimum score. Foundry scores and pass flags "
+            "are unchanged."
+        ),
+        "minimum_dimension_score": MIN_RUBRIC_DIMENSION_SCORE,
+        "passed": sum(case["passed"] for case in cases),
+        "failed": sum(not case["passed"] for case in cases),
+        "cases": cases,
+    }
 
 
 def _case_summary(

@@ -88,6 +88,19 @@ def rubric_item(case_id="test", scores=(5, 5, 5), *, threshold=0.75):
     return item
 
 
+def rubric_case(case_id="test", scores=(5, 5, 5)):
+    result = rubric_item(case_id, scores).results[0]
+    return {
+        "case_id": case_id,
+        "results": [{
+            "name": "hr_rubric",
+            "score": result.score,
+            "passed": result.passed,
+            "dimension_scores": result.properties["dimension_scores"],
+        }],
+    }
+
+
 def completed_run(identifier: str = "run-test", **counts):
     return RunCreateResponse.model_construct(
         id=identifier,
@@ -319,6 +332,21 @@ class ResponseCollectionTests(unittest.TestCase):
 
 
 class CaseValidationTests(unittest.TestCase):
+    def test_unscored_assertions_require_historical_replay(self):
+        for field in (
+            "expectedBehavior", "assertions",
+            "expectedPrimaryDocumentIds", "expectedSupportingDocumentIds",
+        ):
+            with self.subTest(field=field):
+                case = {
+                    "id": "test", "query": "Policy?", "hardRequirement": True,
+                    field: ["Historical requirement."],
+                }
+                with self.assertRaisesRegex(ValueError, "unscored"):
+                    cases._validate_case(case)
+                cases._validate_case(case, historical=True)
+                self.assertIn("Historical requirement.", cases.expected_behavior(case))
+
     def test_unknown_hard_requirements_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown/unsupported"):
             cases._validate_case(
@@ -409,6 +437,9 @@ class CaseValidationTests(unittest.TestCase):
         )
         self.assertEqual(len(loaded), 17)
         self.assertEqual(len({case["id"] for case in loaded}), 17)
+        load_policy_references(
+            Path(__file__).resolve().parent / "agent-quality-references.json", loaded
+        )
 
 
 class FoundryResultTests(unittest.TestCase):
@@ -502,7 +533,6 @@ class PolicyReferenceTests(unittest.TestCase):
                 "query": "Which entitlement?",
                 "hardRequirement": True,
                 "expectedCitationCount": 0,
-                "expectedBehavior": ["Ask which region applies."],
             },
         ]
 
@@ -582,15 +612,9 @@ class PolicyReferenceTests(unittest.TestCase):
             ],
             "expected_behavior": {
                 "cases": [
-                    {
-                        "case_id": case["id"],
-                        "results": [
-                            {
-                                "name": "hr_rubric",
-                                "passed": case["id"] == "answer",
-                            }
-                        ],
-                    }
+                    rubric_case(
+                        case["id"], (5, 5, 5) if case["id"] == "answer" else (3, 3, 3)
+                    )
                     for case in self.cases
                 ]
             },
@@ -606,6 +630,9 @@ class PolicyReferenceTests(unittest.TestCase):
                 ]
             },
         }
+        summary["rubric_assessment"] = foundry.rubric_assessment(
+            summary["expected_behavior"]
+        )
         assessment = scoring.policy_assessment(summary)
         self.assertEqual(assessment["failed"], 2)
         self.assertEqual(
@@ -653,7 +680,9 @@ class PolicyReferenceTests(unittest.TestCase):
                         {
                             "case_id": identifier,
                             "results": [
-                                {"name": criterion["name"], "passed": False}
+                                rubric_case(identifier, (3, 3, 3))["results"][0]
+                                if criterion["name"] == "hr_rubric"
+                                else {"name": criterion["name"], "passed": False}
                                 for criterion in kwargs["criteria"]
                             ],
                         }
@@ -745,9 +774,46 @@ class NativeRubricTests(unittest.TestCase):
         item.results[0].passed = True
         self.assertTrue(self.summary(item)["validation_errors"])
 
+    def test_application_floor_preserves_native_results_and_gates_both_profiles(self):
+        for scores, passes in (
+            ((4, 4, 4), True),
+            ((5, 3, 3), True),
+            ((5, 2, 5), False),
+            ((5, 2, 4), False),
+            ((5, 5, 2), False),
+        ):
+            with self.subTest(scores=scores):
+                stage = self.summary(rubric_item(scores=scores))
+                original = json.dumps(stage, sort_keys=True)
+                self.assertEqual(stage["validation_errors"], [])
+                self.assertTrue(stage["cases"][0]["results"][0]["passed"])
+                assessment = foundry.rubric_assessment(stage)
+                self.assertEqual(assessment["cases"][0]["passed"], passes)
+                self.assertEqual(json.dumps(stage, sort_keys=True), original)
+                for hosted in (False, True):
+                    summary = {
+                        "case_checks": [{"case_id": "test", "status": "passed"}],
+                        "expected_behavior": stage,
+                        "rubric_assessment": assessment,
+                    }
+                    if hosted:
+                        summary["evaluation_plan"] = {
+                            "behavior_case_ids": ["test"], "policy_answer_case_ids": [],
+                        }
+                        summary["assessment"] = scoring.policy_assessment(summary)
+                        self.assertEqual(summary["assessment"]["passed"], int(passes))
+                    with nullcontext() if passes else self.assertRaises(RuntimeError):
+                        scoring.require_demo_pass(summary)
+
+    def test_application_assessment_cannot_accept_missing_dimensions(self):
+        stage = self.summary(rubric_item())
+        del stage["cases"][0]["results"][0]["dimension_scores"]
+        with self.assertRaisesRegex(ValueError, "missing rubric dimension"):
+            foundry.rubric_assessment(stage)
+
     def test_incomplete_or_inconsistent_native_results_are_errors(self):
         for invalid in (
-            "score", "nonfinite", "missing", "duplicate",
+            "score", "nonfinite", "missing", "duplicate", "extra_residual",
             "weight", "skipped", "aggregate", "dimension",
         ):
             with self.subTest(invalid=invalid):
@@ -761,6 +827,8 @@ class NativeRubricTests(unittest.TestCase):
                     dimensions.pop()
                 elif invalid == "duplicate":
                     dimensions[-1] = dict(dimensions[0])
+                elif invalid == "extra_residual":
+                    dimensions.append({**dimensions[-1], "id": "general_quality"})
                 elif invalid == "weight":
                     dimensions[0]["weight"] += 1
                 elif invalid == "skipped":
@@ -925,29 +993,30 @@ class ManualRunnerTests(unittest.TestCase):
             self.assertEqual(summary["collecting_case"], "second")
             self.assertEqual(summary["case_checks"][0]["case_id"], "first")
 
-    def test_manual_report_does_not_enforce_a_pass_gate(self):
+    def test_pass_gate_rejects_failed_citation_checks(self):
         summary = {"case_checks": [{"status": "failed"}]}
-        runner.enforce_optional_pass_requirement(
-            SimpleNamespace(require_behavior_pass=False), summary
-        )
         with self.assertRaisesRegex(RuntimeError, "answer/citation"):
-            runner.enforce_optional_pass_requirement(
-                SimpleNamespace(require_behavior_pass=True), summary
-            )
+            scoring.require_demo_pass(summary)
 
-    def test_optional_gate_preserves_completeness_failures(self):
+    def test_pass_gate_preserves_completeness_failures(self):
         summary = {
             "case_checks": [{"status": "passed"}],
             "expected_behavior": {"cases": [{"results": [{"passed": True}]}]},
             "policy_answers": {"cases": [{"results": [{"passed": False}]}]},
+            "rubric_assessment": {"failed": 0},
+            "assessment": {"failed": 1},
         }
-        runner.enforce_optional_pass_requirement(
-            SimpleNamespace(require_behavior_pass=False), summary
-        )
-        with self.assertRaisesRegex(RuntimeError, "Policy-answer"):
-            runner.enforce_optional_pass_requirement(
-                SimpleNamespace(require_behavior_pass=True), summary
-            )
+        with self.assertRaisesRegex(RuntimeError, "native demo"):
+            scoring.require_demo_pass(summary)
+
+    def test_pass_gate_requires_the_native_assessment_in_both_profiles(self):
+        for hosted in (False, True):
+            with self.subTest(hosted=hosted):
+                summary = {"case_checks": [{"status": "passed"}]}
+                if hosted:
+                    summary["assessment"] = {"failed": 0}
+                with self.assertRaisesRegex(KeyError, "rubric_assessment"):
+                    scoring.require_demo_pass(summary)
 
     def test_manual_runner_collects_and_scores_with_mocked_sdk_then_removes_dataset(
         self,
@@ -1039,6 +1108,7 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 "rubric_sha256": foundry.rubric_fingerprint(args.rubric_threshold),
                 "judge_deployment": args.model_deployment,
                 "rubric_threshold": args.rubric_threshold,
+                "rubric_minimum_dimension_score": foundry.MIN_RUBRIC_DIMENSION_SCORE,
                 "project_endpoint": args.project_endpoint,
                 "case_checks": [{"case_id": "test", "status": "passed"}],
                 "results": [cases.evaluation_row(case, agent_result())],
@@ -1164,12 +1234,19 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 "summary_path": root / "summary.json",
                 "case_ids": {"test"},
             }
+
+            def record_stage(**kwargs):
+                if stage.call_count == 1:
+                    raise RuntimeError("scoring interrupted")
+                if kwargs["label"] == "expected_behavior":
+                    summary["expected_behavior"] = {"cases": [rubric_case()]}
+
             with (
                 patch.object(scoring, "AIProjectClient", return_value=project),
                 patch.object(
                     scoring,
                     "run_stage",
-                    side_effect=[RuntimeError("scoring interrupted"), None, None],
+                    side_effect=record_stage,
                 ) as stage,
             ):
                 with self.assertRaisesRegex(RuntimeError, "scoring interrupted"):
@@ -1202,9 +1279,14 @@ class CapturedBenchmarkTests(unittest.TestCase):
             project.evaluators.create_version.return_value = SimpleNamespace(
                 name="behavior", version="1"
             )
+
+            def record_stage(**kwargs):
+                if kwargs["label"] == "expected_behavior":
+                    summary["expected_behavior"] = {"cases": [rubric_case()]}
+
             with (
                 patch.object(scoring, "AIProjectClient", return_value=project),
-                patch.object(scoring, "run_stage") as stage,
+                patch.object(scoring, "run_stage", side_effect=record_stage) as stage,
             ):
                 scoring.score_dataset(
                     project_endpoint="https://example.test",
@@ -1285,17 +1367,14 @@ class CapturedBenchmarkTests(unittest.TestCase):
                         )
                         summary["expected_behavior"] = {
                             "cases": [
-                                {
-                                    "case_id": "test",
-                                    "results": [
-                                        {
-                                            "score": 5 if behavior_pass else 1,
-                                            "passed": behavior_pass,
-                                        }
-                                    ],
-                                }
+                                rubric_case(
+                                    scores=(5, 5, 5) if behavior_pass else (3, 3, 3)
+                                )
                             ]
                         }
+                        summary["rubric_assessment"] = foundry.rubric_assessment(
+                            summary["expected_behavior"]
+                        )
 
                     with (
                         patch.object(runner, "AzureCliCredential"),

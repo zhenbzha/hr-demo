@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import benchmark_ask_hr_pipeline as benchmark
+from evaluation.foundry import rubric_assessment
+from test_foundry_evaluation import rubric_case
 
 
 def source_reference(identifier="HR-TEST", text="14 paid working days"):
@@ -117,7 +119,7 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await benchmark.run_case(
             pipeline=pipeline,
-            case=case_fixture(assertions=["State 14 paid working days."]),
+            case=case_fixture(),
             user_search_token="test-token",
         )
         self.assertEqual(result["response"], "14 paid working days")
@@ -127,7 +129,7 @@ class PipelineCollectionTests(unittest.IsolatedAsyncioTestCase):
             pipeline.retrieve_authorized_evidence.return_value,
         )
         self.assertNotIn("Never shown to the model", result["context"])
-        self.assertIn("State 14 paid working days.", result["expected_behavior"])
+        self.assertIn("Use evidence from documents: HR-TEST", result["expected_behavior"])
         self.assertEqual(result["citations"][0]["chunk_text"], "14 paid working days")
         self.assertEqual(
             result["response_id_origin"], "local_execution_not_hosted_response"
@@ -348,7 +350,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(summary["totalSeconds"]["samples"], 5)
         self.assertAlmostEqual(summary["totalSeconds"]["p95"], 4.8)
 
-    def _run(self, root, *, scoring_error=False):
+    def _run(self, root, *, scoring_error=False, rubric_scores=(5, 5, 5), require_pass=False):
         cases_path = root / "cases.json"
         cases_path.write_text(json.dumps({"cases": [case_fixture()]}))
         args = argparse.Namespace(
@@ -362,7 +364,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             poll_interval=1,
             timeout=60,
             request_timeout=30,
-            require_behavior_pass=False,
+            require_behavior_pass=require_pass,
             evaluation_python=None,
         )
         captured = {}
@@ -394,6 +396,12 @@ class BenchmarkRunnerTests(unittest.TestCase):
                         }
                     ]
                 }
+            kwargs["summary"]["expected_behavior"]["cases"] = [
+                rubric_case(scores=rubric_scores)
+            ]
+            kwargs["summary"]["rubric_assessment"] = rubric_assessment(
+                kwargs["summary"]["expected_behavior"]
+            )
 
         pipeline = pipeline_fixture()
         with (
@@ -438,6 +446,9 @@ class BenchmarkRunnerTests(unittest.TestCase):
             if scoring_error:
                 with self.assertRaisesRegex(RuntimeError, "unscorable Foundry"):
                     asyncio.run(benchmark.main_async(args))
+            elif require_pass:
+                with self.assertRaisesRegex(RuntimeError, "native demo checks failed"):
+                    asyncio.run(benchmark.main_async(args))
             else:
                 asyncio.run(benchmark.main_async(args))
             scorer.assert_called_once()
@@ -472,6 +483,19 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(summary["response_collection"], "completed")
         self.assertEqual(len(summary["results"]), 1)
         self.assertNotIn("quality", summary)
+
+    def test_benchmark_gate_uses_application_floor_not_raw_native_pass(self):
+        for require_pass in (False, True):
+            with (
+                self.subTest(require_pass=require_pass),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                summary = self._run(
+                    Path(temporary), rubric_scores=(5, 2, 5), require_pass=require_pass
+                )
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["quality"]["hr_rubric"]["passed"], 1)
+            self.assertEqual(summary["rubric_assessment"]["failed"], 1)
 
 
 if __name__ == "__main__":
