@@ -97,8 +97,12 @@ Activity POC model, with separate environment bindings so a main-agent model
 change does not silently switch either. The answer-generation prompt requires
 source-faithful quantities, units, and inclusive/exclusive limits when translating
 or summarizing.
-It also requires coverage of applicable policy conditions and document-wide
-qualifications, without narrowing legal or contractual precedence statements.
+It preserves material policy conditions and answers the employee's question
+directly, without routine fictional-demo/legal disclaimers or document-metadata
+preambles. Company-specific entitlements are briefly attributed to company
+policy within the answer, not presented as universal statutory rights.
+Questions about a document's status, authority, scope, dates, or
+precedence are still answered truthfully from the evidence.
 Missing local passages do not establish that no local policy exists: Global
 baselines remain explicitly labeled and are not confirmed local entitlements.
 
