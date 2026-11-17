@@ -22,6 +22,7 @@ foreach ($agentName in @('ask-hr', 'ask-hr-activity')) {
     }
 
     $existing = az role assignment list `
+        --subscription $values.AZURE_SUBSCRIPTION_ID `
         --assignee-object-id $principalId `
         --scope $scope `
         --query "[?roleDefinitionName=='Search Index Data Reader'].id | [0]" `
@@ -29,6 +30,7 @@ foreach ($agentName in @('ask-hr', 'ask-hr-activity')) {
 
     if (-not $existing) {
         az role assignment create `
+            --subscription $values.AZURE_SUBSCRIPTION_ID `
             --assignee-object-id $principalId `
             --assignee-principal-type ServicePrincipal `
             --role 'Search Index Data Reader' `
