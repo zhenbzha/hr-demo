@@ -48,6 +48,16 @@ remediation can disable public networking again. Keep the exception on this
 demo account, not the resource group. Anonymous blob access and Shared Key
 access remain disabled; data access requires Microsoft Entra authorization.
 
+After Storage provisioning and role assignments complete,
+`infra\modules\storage-lock.bicep` applies the account-scoped
+`keep-demo-storage-public` ReadOnly management lock. It blocks changes to account
+configuration, including public networking; Entra-authenticated PDF reads and
+ingestion uploads remain available. Remove the lock before reprovisioning or
+changing Storage configuration or account-scoped RBAC. A successful infrastructure
+deployment recreates it after role assignments; restore it manually if deployment
+fails. This is not a permanent governance exemption: a principal permitted to
+delete locks can remove it.
+
 ## Document schema review
 
 Ingestion scans every PDF beneath `data\global`, `data\india`, `data\finland`,

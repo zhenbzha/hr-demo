@@ -169,6 +169,18 @@ module roleAssignments './modules/role-assignments.bicep' = {
   }
 }
 
+module storageLock './modules/storage-lock.bicep' = {
+  name: 'storage-lock'
+  scope: resourceGroup
+  params: {
+    storageAccountName: storage.outputs.name
+  }
+  // ReadOnly would block account-scoped role assignments if applied earlier.
+  dependsOn: [
+    roleAssignments
+  ]
+}
+
 output AZURE_LOCATION string = location
 output AZURE_RESOURCE_GROUP string = resourceGroup.name
 output AZURE_SUBSCRIPTION_ID string = subscription().subscriptionId
