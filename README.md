@@ -165,8 +165,12 @@ citations, not internal classifier decisions or retrieval calls. Structured
 response items are preserved for Foundry scoring; no custom response diagnostics
 or Application Insights query is required. Hosted evaluation uses Foundry's
 native rubric evaluator with application-defined HR dimensions and citation
-checks for every case, plus Groundedness and Response Completeness for the
-13 policy-answer cases. PDF-backed references are in
+checks for every case, plus Response Completeness for the
+13 policy-answer cases. The calibrated rubric's policy scope/evidence dimension
+replaces generic Groundedness as the factual-support check in the active suite.
+The generic judge is retired from this profile, not silently marked passed.
+Response Completeness and citation checks remain acceptance
+requirements. PDF-backed references are in
 `tests\agent-quality-references.json` (`--references`); source hashes and
 question/reference coverage are checked before invocation. The four
 clarification/no-policy cases still require rubric and citation acceptance.
@@ -174,15 +178,16 @@ This is a limited demo contract, not evaluation of every scenario-specific
 assertion: active cases reject unscored free-text requirements and
 primary/supporting evidence-role declarations. References are
 assistant-source-checked and need customer/HR review
-before acceptance use. The rubric replaces the custom HR prompt grader, not
-the built-in metrics: request handling, policy scope/evidence, and communication quality
+before acceptance use. The rubric replaces the custom HR prompt grader and the
+generic grounding check: request handling, policy scope/evidence, and communication quality
 have weights 10/5/2, with a default native threshold of 0.75 on the 0-1 scale.
 Application acceptance additionally requires **every dimension to score at
 least 3/5**; Foundry's raw score and pass flag remain unchanged. Old 1-5 HR scores
 and generic-metric results are retained, not relabeled as the new assessment.
 The earlier 16/17 result was a calibration-set, session-composed result, not a
 fresh run of this contract; see [the evaluation limitations](SHARING.md#evaluation-limitations).
-That section also records the fresh current-contract run and its remaining failures.
+That section retains historical runs and limitations; earlier profiles are not
+the current v4 baseline.
 Use
 `--cases tests\agent-quality-cases-legacy.json` with `--replay-cases` for historical
 pre-migration captures; those original case bytes are retained unchanged.

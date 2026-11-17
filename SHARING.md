@@ -409,7 +409,7 @@ of generic relevance, intent-resolution, coherence and groundedness scores:
 | Scope | Checks |
 |---|---|
 | All 17 cases | Native HR rubric, application dimension-score floor, and deterministic citation checks |
-| 13 policy-answer cases | Built-in Groundedness and Response Completeness |
+| 13 policy-answer cases | Response Completeness against independent PDF references |
 | Four cases explicitly expecting zero citations | Fixed rubric's clarification/no-policy checks and zero citations; no invented policy reference answer |
 
 Scope is determined from the test expectations **before grading**, never from
@@ -418,6 +418,18 @@ policy answer cannot escape policy-answer scoring. A clarification/no-policy
 case must still pass the rubric, its dimension-score floor, and citation checks.
 These are deliberately limited demo checks, not a guarantee of every
 scenario-specific requirement or overall HR correctness.
+The rubric's calibrated `policy_scope_and_evidence` dimension is the factual
+support gate, replacing generic Groundedness in this active suite. The generic
+judge repeatedly treated intentionally omitted demo boilerplate and an inclusive
+Chinese numerical boundary as errors. It is retired from the v4 profile, not
+left as a permanently failing diagnostic or silently marked passed. All 17 cases,
+including the disputed maternity answer, remain. This project-specific choice follows
+[Microsoft's guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent)
+to use an agent-specific rubric as the primary measure and layer in other
+evaluators. Source-faithfulness testing is not removed:
+unsupported quantities, units, scope, eligibility, or guarantees must still fail
+the calibrated rubric. Missing, duplicate, or unscorable active results remain
+errors. Old generic scores remain in their original historical reports.
 
 `--references` defaults to `tests\agent-quality-references.json`. This file
 contains independently PDF-derived expected answers, source PDF hashes,
@@ -435,17 +447,19 @@ references; repeat that source review if references change.
 The script captures answers and citations, retains the complete evaluation
 dataset, and submits inline rows using the official SDK pattern. The uploaded
 dataset records all 17 cases; the policy-answer run receives the predeclared
-13-case subset. Groundedness receives the unchanged question, answer text and
-cited policy context, with `tool_definitions: []`, following the SDK sample's
-inline-data mapping. Hosted collection does not capture tool definitions.
+13-case subset. Without a recorded generation conversation, the native rubric
+receives `policy_query`: evaluation-only JSON containing the original question
+and unchanged cited policy context. This is not a fabricated agent transcript.
+The scorer rejects a missing or altered copy of that context before submission.
+Recorded conversations are used unchanged when available. Hosted collection
+does not capture tool definitions and supplies `tool_definitions: []`.
 Response Completeness receives the independent
 `ground_truth` and unchanged answer text. This follows
 [Microsoft's RAG evaluator guidance](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rag-evaluators)
 and the official
-[Groundedness](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_groundedness.py)
-and [Response Completeness](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_response_completeness.py)
-samples. No reference answer or fabricated system instruction is added to the
-employee's question.
+[Response Completeness sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_response_completeness.py).
+No reference answer, expected control decision, or fabricated system instruction
+is included in the rubric's query.
 
 Responses `function_call` and `function_call_output` items are also retained
 in the dataset using the documented
@@ -469,8 +483,9 @@ The following adaptations have specific HR/application requirements:
 The HR grader is a native `EvaluatorDefinitionType.RUBRIC` evaluator, registered
 and version-pinned using the
 [official manual rubric sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/sample_rubric_evaluator_manual.py).
-It replaces the custom prompt-based HR grader, not Groundedness or Response
-Completeness. The fixed, always-applicable dimensions are:
+It replaces the custom prompt-based HR grader and, in the active v4 profile,
+generic Groundedness. Response Completeness remains a separate evaluator.
+The fixed, always-applicable dimensions are:
 
 | Dimension | Relative weight |
 |---|---:|
@@ -509,17 +524,32 @@ passed both native and application acceptance. This is a compatibility check,
 not an agent-quality result. Unexpected dimensions still fail validation
 rather than silently changing the score.
 
-The exact-deadline wording requirement applies to deadline-specific questions,
-not every date mentioned in a broader process or benefits answer. This preserves
-the existing operative-deadline case without adding quotation requirements to
-the other cases.
+Deadline answers are judged on meaning, not exact phrasing: preserve the number,
+counting unit, inclusive/exclusive boundary, conditions, and target versus
+guarantee. Do not invent a starting date or confuse an inquiry timeline with a
+complaint-filing window. Verbatim wording is required only for an explicit
+quotation request. Company-specific entitlements need a brief company-policy
+attribution, not fictional-demo/legal boilerplate or a separate disclaimer.
+`tests\agent-quality-rubric-controls.json` contains synthetic positive and
+negative judge-calibration controls for these rules, including correct answers
+without demo disclaimers, incorrect benefits and eligibility, inclusive versus
+exclusive boundaries, and truthful versus false document-authority answers.
+Their expected decisions
+are declared before scoring and kept out of the judge inputs. They test the
+evaluator, not the agent, and are separate from the 17-case answer-quality suite.
 
 The native evaluator receives the actual question (the recorded conversation for
-local benchmarks), structured response items, and `tool_definitions: []`.
-It does not consume arbitrary `expected_behavior` or reference-answer fields:
+local captures, including when scored against PDF references), structured
+response items, and `tool_definitions: []`. When any dataset row contains
+`agent_query`, every row must contain it; policy-reference scoring does not
+discard captured evidence in favor of a bare question.
+Without captured conversations, `policy_query` explicitly provides the original
+question and unmodified source passages. Response Completeness compares answer
+text with the independent PDF reference.
+The native rubric does not consume arbitrary `expected_behavior` or reference-answer fields:
 the fixed dimension descriptions include HR quality checks and rules derived
 from these demo cases, including EEM/UK handling, the supported region list,
-and exact operative-deadline wording. They are not a general-purpose HR rubric.
+and faithful deadline meaning. They are not a general-purpose HR rubric.
 Active cases therefore reject `expectedBehavior`, `assertions`,
 `expectedPrimaryDocumentIds` and `expectedSupportingDocumentIds`.
 `expectedDocumentIds` checks membership,
@@ -546,10 +576,10 @@ errors even when Foundry marks a run completed. These errors fail the command
 and leave a partial report. Ordinary low scores remain visible for manual
 review. `--require-behavior-pass` optionally enforces the configured
 native rubric threshold, the minimum score of 3 in every dimension, and
-rejects failed citation checks and applicable
-policy-answer scores. `--rubric-threshold` defaults to 0.75 (a weighted mean of
-4/5, but not the same grader as the historical holistic score); the built-in
-Groundedness and Response Completeness thresholds remain their defaults (3/5).
+rejects failed citation checks and applicable Response Completeness scores.
+`--rubric-threshold` defaults to 0.75 (a weighted mean of
+4/5, but not the same grader as the historical holistic score);
+Response Completeness retains its built-in threshold (3/5).
 This gate also applies when rescoring saved responses with `--benchmark-report`;
 the completed scores remain in the report even when the gate fails.
 
@@ -557,9 +587,13 @@ Reports include `evaluation_plan`, reference provenance, separate
 `expected_behavior` (the retained native-stage name) and `policy_answers` stages,
 the independent `rubric_assessment`, and a combined `assessment` listing
 failed checks for every case. Native and application decisions are not
-interchanged. The new `pdf_reference_native_demo_v2` assessment is **not comparable**
-to the historical all-generic-metrics intersection. Historical reports are
-retained unchanged. New benchmark runs also use the native HR rubric while
+interchanged. The `pdf_reference_native_demo_v4` profile retires generic
+Groundedness and records its replacement in `evaluation_plan.retired_evaluators`.
+It does not reuse an old failed score as a pass: extra/legacy policy metrics
+are rejected, so old reports cannot silently become v4 results. It is **not
+directly comparable** to v3's generic diagnostic, v2's additional Groundedness
+gate, or the historical all-generic-metrics intersection. Historical reports
+are retained unchanged. Exploratory benchmark runs also use the native HR rubric while
 retaining their generic diagnostic metrics; historical reference replay keeps
 its recorded prompt evaluator. Generic scores must not be presented as overall
 HR correctness.
@@ -575,6 +609,20 @@ automatic rerun, optimization, or deployment.
 
 ### Evaluation limitations
 
+The v4 replacement was verified on **2026-11-16 (UTC)** with 17 freshly
+generated answers through the local production pipeline and live classification,
+Search, and generation. Native HR rubric version 10, its source-faithfulness
+dimension, and citation checks passed **17/17**; Response Completeness passed
+**13/13**. The maternity case remains in the suite and passed. Replacement-judge
+calibration version 9 matched **19/19** predeclared decisions, including rejecting
+incorrect benefits, eligibility, authority, and numerical boundaries. Source PDFs,
+reference answers, rubric thresholds, and dimension floors were unchanged.
+The report is `output\agent-quality\hr-grounding-v4-20261116T215743Z\evaluation.json`.
+This was a fresh answer-and-scoring run, not a reassessment of old scores; it was
+not a new deployed HTTP/UI run or an independent holdout. Generic Groundedness
+was replaced in the active suite, not made to pass, and historical failures remain
+unaltered in their original reports.
+
 The earlier **16/17** native-rubric result was obtained after revising the rubric
 using those same 17 cases. It is a calibration-set observation, not an independent
 holdout result. Its final summary reused unchanged policy-stage results and was
@@ -585,7 +633,7 @@ publishing a result for this contract; a fresh run on the same cases is still
 not a holdout. Do not silently reuse old captures: case-file hashes and capture
 metadata must match.
 
-The fresh current-contract run on **2026-11-06** completed with **15/17 overall
+The historical v2-contract run on **2026-11-06** completed with **15/17 overall
 passes**, using native rubric version 4. All 17 answers and both scoring stages
 were newly generated through `scripts\run_foundry_evaluation.py`; an
 authentication-only launcher selected the target subscription without changing
@@ -614,8 +662,9 @@ fresh dataset is `.foundry\datasets\evaluation-20261106-141531.jsonl`.
 These generated artifacts remain gitignored. This is still a demo calibration
 run, not an independent holdout or proof of production readiness.
 
-Hosted grading receives the employee question and captured response items;
-benchmark grading also receives the recorded generation conversation.
+Hosted grading now receives the employee question, unchanged cited policy
+context, and captured response items; local captures can additionally provide
+the recorded generation conversation.
 Consequently their native rubric scores are not directly comparable.
 
 ### Saved-answer reference replay

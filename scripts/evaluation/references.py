@@ -129,6 +129,26 @@ def load_policy_references(
     )
 
 
+def policy_evaluation_query(row: dict[str, Any]) -> str:
+    """
+    Pair the original question with unmodified source context for evaluation.
+
+    Parameters
+    ----------
+    row : dict
+        Captured ``query`` and ``context``. No reference answer is included.
+
+    Returns
+    -------
+    str
+        Evaluation-only JSON, not a reconstruction of the agent's conversation.
+    """
+    return json.dumps(
+        {"question": row["query"], "policy_context": row["context"]},
+        ensure_ascii=False,
+    )
+
+
 def policy_dataset_rows(
     rows: list[dict[str, Any]], references: PolicyReferences
 ) -> list[dict[str, Any]]:
@@ -145,8 +165,10 @@ def policy_dataset_rows(
     Returns
     -------
     list of dict
-        Copies of every input row with ``ground_truth`` added. Non-policy
-        cases have an empty reference and do not receive completeness scoring.
+        Copies with independent ``ground_truth`` and an evaluation-only
+        ``policy_query`` containing the question and unchanged source context.
+        Non-policy cases have an empty reference and no completeness scoring.
+        Original questions, conversations, and responses are preserved.
 
     Raises
     ------
@@ -166,6 +188,10 @@ def policy_dataset_rows(
         ):
             raise ValueError(f"{case['id']}: captured question or requirements changed")
         prepared.append(
-            {**row, "ground_truth": references.answers.get(row["case_id"], "")}
+            {
+                **row,
+                "ground_truth": references.answers.get(row["case_id"], ""),
+                "policy_query": policy_evaluation_query(row),
+            }
         )
     return prepared

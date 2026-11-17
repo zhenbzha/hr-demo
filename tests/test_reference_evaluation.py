@@ -598,17 +598,31 @@ class ReferenceFoundryContractTests(unittest.TestCase):
     def test_inline_replay_uses_captured_items_not_an_agent_target(self):
         client = Mock()
         client.evals.create.return_value = SimpleNamespace(id="eval")
+        client.evals.runs.create.return_value = completed_run()
+        client.evals.runs.output_items.list.return_value = [
+            scored_item("captured", ("groundedness",))
+        ]
         rows = [{"case_id": "captured"}]
         schema = foundry.dataset_schema(references=True)
-        foundry.start_run(
-            client,
-            name="replay",
-            dataset_id=None,
-            criteria=[],
-            metadata={},
-            inline_rows=rows,
-            schema=schema,
-        )
+        summary = {
+            "agent": {"name": "ask-hr", "version": "captured"},
+            "dataset_version": "replay",
+            "dataset_id": "azureai://lineage-only",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            runner.run_stage(
+                client=client,
+                name="replay",
+                criteria=[{"name": "groundedness"}],
+                settings=foundry.EvaluationSettings("judge", 4, 1, 60),
+                summary=summary,
+                summary_path=Path(temporary) / "summary.json",
+                case_ids={"captured"},
+                label="built_in",
+                inline_rows=rows,
+                schema=schema,
+            )
+        self.assertEqual(summary["built_in"]["validation_errors"], [])
         self.assertEqual(
             client.evals.create.call_args.kwargs["data_source_config"], schema
         )
@@ -616,15 +630,6 @@ class ReferenceFoundryContractTests(unittest.TestCase):
         self.assertEqual(
             source, {"type": "file_content", "content": [{"item": rows[0]}]}
         )
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            foundry.start_run(
-                client,
-                name="bad",
-                dataset_id="dataset",
-                criteria=[],
-                metadata={},
-                inline_rows=rows,
-            )
 
     def test_catalog_versions_and_existing_hr_judge_are_reused(self):
         with tempfile.TemporaryDirectory() as temporary:

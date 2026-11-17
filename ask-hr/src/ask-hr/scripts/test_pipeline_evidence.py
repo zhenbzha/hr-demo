@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -33,11 +31,6 @@ with (
 with patch("azure.ai.agentserver.responses.ResponsesAgentServerHost") as host:
     host.return_value.response_handler.side_effect = lambda handler: handler
     import main as responses_adapter
-
-with patch.object(
-    sys, "path", [str(Path(__file__).resolve().parents[4] / "scripts"), *sys.path]
-):
-    import validate_hosted_agent as hosted_validator
 
 
 def model_stream(
@@ -75,27 +68,6 @@ class GenerationConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(pipeline.GENERATION_REASONING_EFFORT, "high")
         self.assertEqual(options, {"store": False, "reasoning": {"effort": "high"}})
-
-
-class HostedValidationContractTests(unittest.TestCase):
-    def test_no_evidence_validator_accepts_the_pipeline_response(self) -> None:
-        hosted_validator.no_evidence(
-            hosted_validator.AgentResponse(pipeline.NO_ACCESSIBLE_EVIDENCE, [])
-        )
-
-    def test_no_evidence_validator_still_rejects_citations(self) -> None:
-        with self.assertRaisesRegex(AssertionError, "unrelated policy"):
-            hosted_validator.no_evidence(
-                hosted_validator.AgentResponse(
-                    pipeline.NO_ACCESSIBLE_EVIDENCE, [{"document_id": "unrelated"}]
-                )
-            )
-
-    def test_no_evidence_validator_still_requires_a_policy_gap(self) -> None:
-        with self.assertRaisesRegex(AssertionError, "policy gap"):
-            hosted_validator.no_evidence(
-                hosted_validator.AgentResponse("This expense is reimbursed.", [])
-            )
 
 
 class PipelineEvidenceTests(unittest.IsolatedAsyncioTestCase):

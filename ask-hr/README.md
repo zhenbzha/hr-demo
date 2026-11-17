@@ -27,7 +27,7 @@ are never evidence. There is no app-only retrieval fallback.
 
 The current Search index has no permission metadata, so valid users still see
 the same corpus. The token-forwarding contract is ready for the later native
-ACL/index migration. hosted agent
+ACL/index migration.
 
 Ask HR is a Microsoft Foundry hosted agent that answers regional HR policy
 questions for India, Finland, and Hong Kong, using Global policy as a baseline.
@@ -87,12 +87,22 @@ index. Each successful deployment creates an immutable agent version.
 
 ## Validate
 
-The repository-level quality runner exercises all hard requirements against the
-deployed Responses endpoint:
+Use the repository-level Foundry evaluation runner against the deployed Responses
+endpoint. From the repository root, configure the environment variables described
+in the [evaluation guide](../SHARING.md#manual-foundry-evaluation), then run:
 
 ```powershell
-python ..\scripts\validate_hosted_agent.py
+uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py
 ```
 
-The suite covers region clarification, multilingual questions, local-over-
-Global precedence, unsupported regions, policy gaps, and source citations.
+All cases receive the application-defined HR rubric, a dimension-score floor,
+and deterministic citation checks. Policy-answer cases also receive Response
+Completeness checks against PDF-derived references. The calibrated rubric's
+policy scope/evidence dimension replaces generic Groundedness as the
+source-faithfulness check. All test cases remain; the mismatched generic
+judge is retired from this profile, with historical results preserved.
+These are limited
+demo checks, not verification of every scenario-specific requirement.
+
+Review the saved report; add `--require-behavior-pass` when failed demo checks
+must produce a nonzero exit code.

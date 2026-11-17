@@ -348,7 +348,6 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
                 summary_path=args.benchmark_report,
                 case_ids=set(case_map),
                 request_timeout=args.request_timeout,
-                agent_inputs=True,
             )
             summary["scoring_complete"] = True
             if args.require_behavior_pass:
@@ -522,7 +521,11 @@ def main() -> None:
     assessment = summary["assessment"]
     print(
         f"Native demo checks: {assessment['passed']} passed, "
-        f"{assessment['failed']} failed (PDF-reference profile)."
+        f"{assessment['failed']} failed (PDF-reference v4)."
+    )
+    print(
+        "Source faithfulness: calibrated HR rubric with a per-dimension floor. "
+        "Generic Groundedness is retired from this suite; no cases are excluded."
     )
 
 

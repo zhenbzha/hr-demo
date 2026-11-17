@@ -551,7 +551,14 @@ class PolicyReferenceTests(unittest.TestCase):
             self.assertEqual(json.dumps(rows, sort_keys=True), original)
             for before, after in zip(rows, prepared, strict=True):
                 self.assertEqual(
-                    before, {key: value for key, value in after.items() if key != "ground_truth"}
+                    before, {
+                        key: value for key, value in after.items()
+                        if key not in {"ground_truth", "policy_query"}
+                    }
+                )
+                self.assertEqual(
+                    json.loads(after["policy_query"]),
+                    {"question": before["query"], "policy_context": before["context"]},
                 )
             with self.assertRaisesRegex(ValueError, "uniquely cover"):
                 policy_dataset_rows(rows[:1], references)
@@ -579,20 +586,11 @@ class PolicyReferenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     load_policy_references(path, self.cases)
 
-    def test_policy_mappings_use_real_context_and_independent_reference(self):
+    def test_policy_completeness_uses_independent_reference_not_generic_grounding(self):
         criteria = {
             item["name"]: item for item in foundry.policy_answer_criteria("judge")
         }
-        self.assertEqual(set(criteria), {"groundedness", "response_completeness"})
-        self.assertEqual(
-            criteria["groundedness"]["data_mapping"],
-            {
-                "query": "{{item.query}}",
-                "response": "{{item.response}}",
-                "context": "{{item.context}}",
-                "tool_definitions": "{{item.tool_definitions}}",
-            },
-        )
+        self.assertEqual(set(criteria), {"response_completeness"})
         self.assertEqual(
             criteria["response_completeness"]["data_mapping"],
             {"ground_truth": "{{item.ground_truth}}", "response": "{{item.response}}"},
@@ -623,7 +621,6 @@ class PolicyReferenceTests(unittest.TestCase):
                     {
                         "case_id": "answer",
                         "results": [
-                            {"name": "groundedness", "passed": True},
                             {"name": "response_completeness", "passed": False},
                         ],
                     }
@@ -646,6 +643,66 @@ class PolicyReferenceTests(unittest.TestCase):
             scoring.policy_assessment(summary)
 
     def test_policy_stage_scope_does_not_depend_on_response_content(self):
+        self._score_policy_profile(captured=False)
+
+    def test_replacement_retains_factual_completeness_and_citation_gates(self):
+        for defect, expected_failures in (
+            ("valid", []),
+            ("unsupported_claim", ["hr_rubric.policy_scope_and_evidence.minimum_score"]),
+            ("incomplete", ["response_completeness"]),
+            ("citation", ["citation_checks"]),
+        ):
+            with self.subTest(defect=defect):
+                summary = {
+                    "evaluation_plan": {
+                        "behavior_case_ids": ["answer"],
+                        "policy_answer_case_ids": ["answer"],
+                    },
+                    "case_checks": [{
+                        "case_id": "answer",
+                        "status": "failed" if defect == "citation" else "passed",
+                    }],
+                    "rubric_assessment": foundry.rubric_assessment({
+                        "cases": [rubric_case(
+                            "answer", (5, 2, 5) if defect == "unsupported_claim" else (5, 5, 5)
+                        )],
+                    }),
+                    "policy_answers": {"cases": [{
+                        "case_id": "answer",
+                        "results": [
+                            {
+                                "name": "response_completeness",
+                                "passed": defect != "incomplete",
+                            },
+                        ],
+                    }]},
+                }
+                original = json.dumps(summary, sort_keys=True)
+                assessment = scoring.policy_assessment(summary)
+                self.assertEqual(json.dumps(summary, sort_keys=True), original)
+                self.assertEqual(assessment["cases"][0]["failed_requirements"], expected_failures)
+                summary["assessment"] = assessment
+                with nullcontext() if not expected_failures else self.assertRaises(RuntimeError):
+                    scoring.require_demo_pass(summary)
+                for invalid in ("missing", "duplicate", "unscorable", "retired_metric"):
+                    with self.subTest(invalid=invalid):
+                        broken = json.loads(original)
+                        metrics = broken["policy_answers"]["cases"][0]["results"]
+                        if invalid == "missing":
+                            metrics.pop(0)
+                        elif invalid == "duplicate":
+                            metrics.append(metrics[0])
+                        elif invalid == "retired_metric":
+                            metrics.append({"name": "groundedness", "passed": False})
+                        else:
+                            metrics[0]["passed"] = None
+                        with self.assertRaisesRegex(ValueError, "invalid policy metrics"):
+                            scoring.policy_assessment(broken)
+
+    def test_policy_profile_preserves_captured_evidence_in_rubric_inputs(self):
+        self._score_policy_profile(captured=True)
+
+    def _score_policy_profile(self, *, captured):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             references = load_policy_references(
@@ -658,6 +715,15 @@ class PolicyReferenceTests(unittest.TestCase):
                 ],
                 references,
             )
+            if captured:
+                for row in rows:
+                    row["agent_query"] = [{
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "text": "Recorded question and supplied policy evidence.",
+                        }],
+                    }]
             path = root / "responses.jsonl"
             runner._write_dataset_rows(path, rows)
             summary = {
@@ -707,8 +773,92 @@ class PolicyReferenceTests(unittest.TestCase):
                     policy_case_ids=set(references.answers),
                 )
             self.assertEqual(stage.call_args_list[0].kwargs["case_ids"], {"answer", "clarify"})
+            self.assertEqual(stage.call_args_list[0].kwargs["inline_rows"], rows)
             self.assertEqual(stage.call_args_list[1].kwargs["case_ids"], {"answer"})
+            self.assertEqual(
+                summary["scoring_inputs"]["source"], "inline_pdf_reference_dataset"
+            )
+            query_field = "agent_query" if captured else "policy_query"
+            self.assertEqual(summary["scoring_inputs"]["rubric_query_field"], query_field)
+            rubric_stage = stage.call_args_list[0].kwargs
+            self.assertEqual(
+                rubric_stage["criteria"][0]["data_mapping"]["query"],
+                "{{item." + query_field + "}}",
+            )
+            self.assertEqual(
+                "agent_query" in rubric_stage["schema"]["item_schema"]["required"],
+                captured,
+            )
+            self.assertEqual(
+                [item["name"] for item in stage.call_args_list[1].kwargs["criteria"]],
+                ["response_completeness"],
+            )
             self.assertEqual(summary["assessment"]["failed"], 2)
+
+    def test_missing_or_changed_policy_context_fails_before_scoring(self):
+        for invalid in (None, '{"question":"Policy?","policy_context":"changed"}'):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                references = load_policy_references(
+                    policy_reference_fixture(root, self.cases), self.cases
+                )
+                rows = policy_dataset_rows(
+                    [cases.evaluation_row(case, agent_result()) for case in self.cases],
+                    references,
+                )
+                if invalid is None:
+                    rows[0].pop("policy_query")
+                else:
+                    rows[0]["policy_query"] = invalid
+                path = root / "responses.jsonl"
+                runner._write_dataset_rows(path, rows)
+                with (
+                    patch.object(scoring, "AIProjectClient") as project,
+                    self.assertRaisesRegex(ValueError, "captured question and context"),
+                ):
+                    scoring.score_dataset(
+                        project_endpoint="https://example.test",
+                        dataset_name="answers",
+                        evaluation_name="quality",
+                        settings=foundry.EvaluationSettings("judge", 0.75, 1, 60),
+                        credential=Mock(),
+                        dataset_path=path,
+                        summary={},
+                        summary_path=root / "report.json",
+                        case_ids={"answer", "clarify"},
+                        policy_case_ids={"answer"},
+                    )
+                project.assert_not_called()
+
+    def test_partial_or_empty_captured_inputs_fail_before_policy_scoring(self):
+        for invalid in ("missing", None, []):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                rows = [
+                    {"case_id": "answer", "agent_query": [{"role": "user", "content": []}]},
+                    {"case_id": "clarify"},
+                ]
+                if invalid != "missing":
+                    rows[1]["agent_query"] = invalid
+                path = root / "responses.jsonl"
+                runner._write_dataset_rows(path, rows)
+                with (
+                    patch.object(scoring, "AIProjectClient") as project,
+                    self.assertRaisesRegex(ValueError, "nonempty agent_query in every row"),
+                ):
+                    scoring.score_dataset(
+                        project_endpoint="https://example.test",
+                        dataset_name="answers",
+                        evaluation_name="quality",
+                        settings=foundry.EvaluationSettings("judge", 0.75, 1, 60),
+                        credential=Mock(),
+                        dataset_path=path,
+                        summary={},
+                        summary_path=root / "report.json",
+                        case_ids={"answer", "clarify"},
+                        policy_case_ids={"answer"},
+                    )
+                project.assert_not_called()
 
 
 class NativeRubricTests(unittest.TestCase):
@@ -1039,7 +1189,7 @@ class ManualRunnerTests(unittest.TestCase):
                 [
                     scored_item(
                         "test",
-                        ("groundedness", "response_completeness"),
+                        ("response_completeness",),
                     )
                 ],
             ]
@@ -1207,7 +1357,8 @@ class CapturedBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             dataset_path = root / "responses.jsonl"
-            dataset_path.write_text('{"case_id":"test"}\n', encoding="utf-8")
+            rows = scoring.captured_dataset_rows(self.captured_summary())
+            runner._write_dataset_rows(dataset_path, rows)
             dataset = SimpleNamespace(id="azureai://test-dataset")
             project = MagicMock()
             project.__enter__.return_value = project
@@ -1258,6 +1409,8 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 name="answers", version="test-version"
             )
             self.assertEqual(stage.call_count, 3)
+            for call in stage.call_args_list:
+                self.assertEqual(call.kwargs["inline_rows"], rows)
 
     def test_agent_input_rescore_does_not_grade_the_legacy_registered_rows(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1298,7 +1451,6 @@ class CapturedBenchmarkTests(unittest.TestCase):
                     summary=summary,
                     summary_path=root / "summary.json",
                     case_ids={"test"},
-                    agent_inputs=True,
                 )
             project.datasets.upload_file.assert_not_called()
             project.datasets.get.assert_called_once_with(
@@ -1311,6 +1463,7 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 summary["scoring_inputs"],
                 {
                     "source": "inline_verified_captured_agent_query",
+                    "rubric_query_field": "agent_query",
                     "sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
                     "registered_dataset_usage": "capture_lineage_only",
                 },

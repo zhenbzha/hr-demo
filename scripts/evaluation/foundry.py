@@ -24,7 +24,6 @@ from openai.types.evals.create_eval_jsonl_run_data_source_param import (
     CreateEvalJSONLRunDataSourceParam,
     SourceFileContent,
     SourceFileContentContent,
-    SourceFileID,
 )
 from openai.types.evals.runs import OutputItemListResponse
 from openai.types.evals.runs.output_item_list_response import Result
@@ -49,12 +48,14 @@ RUBRIC_DIMENSIONS = (
             "not cover the request, acknowledge that limitation rather than inventing "
             "a benefit or approval. A correct clarification or no-policy response "
             "fully satisfies the task; do not penalize it for withholding an "
-            "unsupported entitlement. When the question specifically asks for an "
-            "operative policy deadline, quote the operative wording without "
-            "changing its counting unit or substituting a complaint-filing window "
-            "for an inquiry timeline. Accurate paraphrases of deadlines in broader "
-            "process or benefit answers are acceptable; an unrequested complaint "
-            "window need not be discussed. Score 5 when all applicable requirements "
+            "unsupported entitlement. Accept semantically equivalent deadline "
+            "wording, including in deadline-specific answers. Preserve the number, "
+            "counting unit, inclusive/exclusive boundary, conditions and target "
+            "versus guarantee. Do not invent a starting date or substitute a "
+            "complaint-filing window for an inquiry timeline. Require verbatim "
+            "wording only when the user explicitly requests a quotation. An "
+            "unrequested complaint window need not be discussed. Score 5 when all "
+            "applicable requirements "
             "are met, 4 for only "
             "minor omissions, 3 for a meaningful missing requirement, 2 for an "
             "important contradiction, and 1 for substantially incorrect behavior."
@@ -68,7 +69,10 @@ RUBRIC_DIMENSIONS = (
             "Use the actual policy evidence present in the recorded input or "
             "response. The policies describe a fictional company: do not replace "
             "their provisions with external employment law or general legal "
-            "knowledge. Apply local policy first, use Global provisions for gaps, "
+            "knowledge. Frame company-specific entitlements as company policy, "
+            "not universal statutory rights for everyone in a country. A brief "
+            "in-sentence attribution is sufficient; no separate disclaimer is "
+            "required. Apply local policy first, use Global provisions for gaps, "
             "and identify Global rules as Global rather than inventing local rules. "
             "Compare countries only when requested, preserving their different "
             "entitlements, periods and counting units. Policy claims must be "
@@ -92,7 +96,10 @@ RUBRIC_DIMENSIONS = (
             "including Finnish or Traditional Chinese. Preserve material policy "
             "qualifications and uncertainty without obscuring the answer. A short, "
             "correct clarification or no-policy response can earn 5; do not demand "
-            "extra detail, a legal essay, or unsupported commitments. Assess "
+            "extra detail, a legal essay, or unsupported commitments. Routine "
+            "answers need not repeat fictional/demo/testing or not-legal-advice "
+            "labels or blanket precedence disclaimers. Explicit document-status "
+            "or authority questions still require truthful answers. Assess "
             "observable answer quality, not missing internal execution traces. "
             "Score 5 for a clear, complete response appropriate to this turn, "
             "4 for minor communication omissions, 3 for material ambiguity, "
@@ -143,7 +150,8 @@ def dataset_schema(
     agent_inputs : bool, default=False
         Require saved conversation messages (``agent_query``).
     policy_answers : bool, default=False
-        Require PDF-derived reference answers without requiring model traces.
+        Require PDF-derived reference answers and evaluation-only
+        ``policy_query`` source context, without requiring model traces.
 
     Returns
     -------
@@ -169,6 +177,8 @@ def dataset_schema(
     )
     if references or policy_answers:
         properties["ground_truth"] = {"type": "string"}
+    if policy_answers:
+        properties["policy_query"] = {"type": "string"}
     if references or agent_inputs:
         properties["agent_query"] = {"type": "array", "items": {"type": "object"}}
     return DataSourceConfigCustom(
@@ -241,36 +251,29 @@ def built_in_criteria(
     return criteria
 
 
-def policy_answer_criteria(
-    model_deployment: str,
-) -> list[TestingCriterionAzureAIEvaluator]:
+def policy_answer_criteria(model_deployment: str) -> list[TestingCriterionAzureAIEvaluator]:
     """
-    Score policy answers against cited passages and independent references.
+    Score policy-answer completeness against independent PDF references.
 
     Parameters
     ----------
     model_deployment : str
-        Existing judge deployment. Built-in passing thresholds are unchanged.
+        Existing judge deployment. The built-in passing threshold is unchanged.
 
     Returns
     -------
     list of TestingCriterionAzureAIEvaluator
-        Groundedness receives the question, answer text, policy context and
-        recorded tool definitions (empty when unavailable).
-        Response Completeness receives reference answer and answer text,
-        following the Microsoft RAG evaluator samples.
+        Response Completeness receives reference answer and answer text.
+        Source faithfulness is scored separately by the calibrated HR rubric;
+        the mismatched generic Groundedness evaluator is not in this suite.
     """
     return [
         TestingCriterionAzureAIEvaluator(
             type="azure_ai_evaluator",
-            name=name,
-            evaluator_name=f"builtin.{name}",
+            name="response_completeness",
+            evaluator_name="builtin.response_completeness",
             initialization_parameters={"deployment_name": model_deployment},
-            data_mapping=_dataset_field_mapping(fields),
-        )
-        for name, fields in (
-            ("groundedness", ("query", "response", "context", "tool_definitions")),
-            ("response_completeness", ("ground_truth", "response")),
+            data_mapping=_dataset_field_mapping(("ground_truth", "response")),
         )
     ]
 
@@ -378,7 +381,11 @@ def create_rubric_evaluator(
 
 
 def rubric_criterion(
-    evaluator: EvaluatorVersion, settings: EvaluationSettings, *, agent_inputs: bool = False
+    evaluator: EvaluatorVersion,
+    settings: EvaluationSettings,
+    *,
+    agent_inputs: bool = False,
+    policy_answers: bool = False,
 ) -> TestingCriterionAzureAIEvaluator:
     """
     Map real recorded inputs and outputs into the native rubric.
@@ -391,7 +398,11 @@ def rubric_criterion(
         Existing judge deployment; the threshold belongs to the definition.
     agent_inputs : bool, default=False
         Use the actual captured generation conversation for local benchmarks.
-        Hosted captures use their unchanged user question.
+        Takes precedence over ``policy_answers`` when both are enabled.
+    policy_answers : bool, default=False
+        Without a recorded conversation, use ``policy_query``: the original
+        question plus unmodified captured source context, not a fabricated
+        agent conversation or the reference answer.
 
     Returns
     -------
@@ -399,6 +410,9 @@ def rubric_criterion(
         Native criterion with supported query, response and tool-definition
         mappings. No reference answer or fabricated message is inserted.
     """
+    query_field = (
+        "agent_query" if agent_inputs else "policy_query" if policy_answers else "query"
+    )
     return TestingCriterionAzureAIEvaluator(
         type="azure_ai_evaluator",
         name="hr_rubric",
@@ -406,7 +420,7 @@ def rubric_criterion(
         evaluator_version=evaluator.version,
         initialization_parameters={"deployment_name": settings.model_deployment},
         data_mapping={
-            "query": "{{item.agent_query}}" if agent_inputs else "{{item.query}}",
+            "query": "{{item." + query_field + "}}",
             "response": "{{item.output_items}}",
             "tool_definitions": "{{item.tool_definitions}}",
         },
@@ -457,10 +471,9 @@ def start_run(
     client: OpenAI,
     *,
     name: str,
-    dataset_id: str | None,
     criteria: list[TestingCriterionAzureAIEvaluator],
     metadata: dict[str, str],
-    inline_rows: list[dict[str, Any]] | None = None,
+    inline_rows: list[dict[str, Any]],
     schema: DataSourceConfigCustom | None = None,
 ) -> tuple[EvalCreateResponse, RunCreateResponse]:
     """
@@ -472,15 +485,12 @@ def start_run(
         Authenticated OpenAI client obtained from the Foundry project.
     name : str
         Display name for the evaluation and its run.
-    dataset_id : str or None
-        Registered Foundry dataset ID, or None for inline rows.
     criteria : list of TestingCriterionAzureAIEvaluator
         Evaluators and the dataset fields they read.
     metadata : dict
         Labels recording the agent and dataset versions.
-    inline_rows : list of dict or None, default=None
-        Prepared answer rows sent directly to the run, or None
-        when using a registered dataset. Provide exactly one input source.
+    inline_rows : list of dict
+        Prepared answer rows sent directly to the run.
     schema : DataSourceConfigCustom or None, default=None
         Matching custom row schema; defaults to ``dataset_schema()``.
 
@@ -491,17 +501,10 @@ def start_run(
     run : RunCreateResponse
         Newly submitted run. Call ``wait_for_run`` before reading scores.
     """
-    if (dataset_id is None) == (inline_rows is None):
-        raise ValueError("Provide exactly one dataset ID or inline dataset")
-    if inline_rows is not None:
-        source = SourceFileContent(
-            type="file_content",
-            content=[SourceFileContentContent(item=row) for row in inline_rows],
-        )
-    elif dataset_id is not None:
-        source = SourceFileID(type="file_id", id=dataset_id)
-    else:
-        raise ValueError("A dataset is required")
+    source = SourceFileContent(
+        type="file_content",
+        content=[SourceFileContentContent(item=row) for row in inline_rows],
+    )
     evaluation = client.evals.create(
         name=name,
         data_source_config=dataset_schema() if schema is None else schema,

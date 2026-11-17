@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "purpose": "Synthetic judge-calibration controls, not generated agent answers or holdout validation. Expected decisions are declared before scoring and are never sent to the judge. Evidence comes from the source_case_id's PDF-reference passages and any supplemental_passages below.",
+  "supplemental_evidence_review": "Assistant source-checked against the retained Document Intelligence pages for PDF SHA-256 2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83. This is calibration evidence, not independent HR-expert adjudication.",
+  "supplemental_passages": {
+    "AGENT-REGION-LABEL": [
+      {
+        "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+        "page": 1,
+        "quote": "本文件只供測試「Ask HR」知識助理使用,內容屬虛構示範,並非法律意見或正式僱傭政策。香港法例、適用\n的僱傭合約及正式公司規則如有不同,均以該等文件為準。"
+      },
+      {
+        "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+        "page": 3,
+        "quote": "● 兩天以上的計劃假期一般提前七天申請。"
+      }
+    ]
+  },
+  "controls": [
+    {
+      "id": "DEADLINE-FAITHFUL-PARAPHRASE",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Under our India policy, the target is to complete the POSH inquiry in 90 days or less. This is an indicative timeline.",
+      "expected_pass": true,
+      "reason": "Preserves the number, days, inclusive boundary and target without an unrequested verbatim quote."
+    },
+    {
+      "id": "DEADLINE-WRONG-UNIT",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Under our India policy, the target is to complete the POSH inquiry within 90 working days.",
+      "expected_pass": false,
+      "reason": "The source says days, not working days."
+    },
+    {
+      "id": "DEADLINE-EXCLUSIVE-BOUNDARY",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Under our India policy, the target is to complete the POSH inquiry in strictly less than 90 days; completion on day 90 misses the target.",
+      "expected_pass": false,
+      "reason": "Changes the inclusive 90-day boundary into an exclusive limit."
+    },
+    {
+      "id": "DEADLINE-GUARANTEED",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Our India policy guarantees that every POSH inquiry will be completed within 90 days, with no exceptions.",
+      "expected_pass": false,
+      "reason": "Changes an indicative target into an unconditional guarantee."
+    },
+    {
+      "id": "DEADLINE-WRONG-PROCESS",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Under our India policy, the target timeline for completing the POSH inquiry is the three-month complaint-filing window.",
+      "expected_pass": false,
+      "reason": "Substitutes a different process stage and unit."
+    },
+    {
+      "id": "DEADLINE-INVENTED-START",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "response": "Under our India policy, the target is to complete the POSH inquiry within 90 days, counted from the date of the incident.",
+      "expected_pass": false,
+      "reason": "Invents a counting start date absent from the source."
+    },
+    {
+      "id": "DEADLINE-REQUESTED-QUOTE",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "query": "Quote the exact wording of the India policy's target timeline for completing a POSH inquiry.",
+      "response": "The India policy states: \"Target completion within 90 days\".",
+      "expected_pass": true,
+      "reason": "An explicit quotation request is satisfied accurately."
+    },
+    {
+      "id": "DEADLINE-MISSING-REQUESTED-QUOTE",
+      "source_case_id": "AGENT-OPERATIVE-DEADLINE",
+      "query": "Quote the exact wording of the India policy's target timeline for completing a POSH inquiry.",
+      "response": "Under our India policy, the target is to complete the POSH inquiry in 90 days or less.",
+      "expected_pass": false,
+      "reason": "A paraphrase is not sufficient when the user explicitly requests the exact wording."
+    },
+    {
+      "id": "HK-COMPANY-SCOPE",
+      "source_case_id": "AGENT-HK-ANNUAL-LEAVE",
+      "response": "Our Hong Kong policy provides 14 paid working days of annual leave per calendar year, no less than the applicable statutory entitlement. Leave is prorated in joining and leaving years.",
+      "expected_pass": true,
+      "reason": "Preserves company scope and all relevant conditions without a demo/legal disclaimer."
+    },
+    {
+      "id": "HK-COMPANY-SCOPE-ZH",
+      "source_case_id": "AGENT-MULTILINGUAL-HK",
+      "response": "根據公司的香港政策，每個曆年提供14個有薪工作日年假，不少於當時適用的法定權益。新入職或離職年度按比例計算。",
+      "expected_pass": true,
+      "reason": "Preserves company scope, units, statutory floor and proration in Traditional Chinese."
+    },
+    {
+      "id": "HK-UNIVERSAL-STATUTORY-CLAIM",
+      "source_case_id": "AGENT-HK-ANNUAL-LEAVE",
+      "response": "Hong Kong law guarantees every employee at every company 14 paid working days of annual leave per calendar year, no less than the applicable statutory entitlement. Leave is prorated in joining and leaving years.",
+      "expected_pass": false,
+      "reason": "Turns a company-specific benefit into a universal statutory claim."
+    },
+    {
+      "id": "HK-MATERNITY-NO-DEMO-LABEL",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "response": "Our Hong Kong policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration.",
+      "expected_pass": true,
+      "reason": "Answers within the company-policy scenario without an unrequested demo disclaimer, even when the evidence includes that label."
+    },
+    {
+      "id": "HK-MATERNITY-WRONG-AMOUNT",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "response": "Our Hong Kong policy provides 26 weeks of maternity leave at full pay, no less than the applicable statutory duration.",
+      "expected_pass": false,
+      "reason": "An incorrect entitlement must fail even when company scope is correct and boilerplate is omitted."
+    },
+    {
+      "id": "HK-MATERNITY-INVENTED-ELIGIBILITY",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "response": "Our Hong Kong policy provides 16 weeks of maternity leave at full pay. Every employee qualifies immediately on joining, regardless of length of service or statutory eligibility conditions.",
+      "expected_pass": false,
+      "reason": "Invents eligibility conditions not established by the policy evidence."
+    },
+    {
+      "id": "HK-INCLUSIVE-BOUNDARY",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "query": "Under our Hong Kong policy, should planned leave lasting exactly two days normally be requested seven days in advance?",
+      "response": "Yes. Our Hong Kong policy says planned leave lasting two days or more should normally be requested seven days in advance, so exactly two days is included.",
+      "expected_pass": true,
+      "reason": "Preserves the inclusive numerical threshold in 兩天以上 and the normal, not unconditional, notice rule."
+    },
+    {
+      "id": "HK-EXCLUSIVE-BOUNDARY",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "query": "Under our Hong Kong policy, should planned leave lasting exactly two days normally be requested seven days in advance?",
+      "response": "No. Our Hong Kong policy applies the seven-day advance request rule only to planned leave lasting strictly more than two days; exactly two days is excluded.",
+      "expected_pass": false,
+      "reason": "Incorrectly excludes the stated number from the source's inclusive threshold."
+    },
+    {
+      "id": "HK-INCLUSIVE-BOUNDARY-ZH",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "query": "按公司香港政策，計劃請假剛好兩天，是否一般要提前七天申請？",
+      "response": "是。公司香港政策規定，兩天以上的計劃假期一般提前七天申請；兩天以上包括剛好兩天。",
+      "expected_pass": true,
+      "reason": "Preserves the inclusive threshold and normal-notice qualification in the source language."
+    },
+    {
+      "id": "HK-EXPLICIT-DOCUMENT-STATUS",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "query": "Is the supplied Hong Kong document a formal employment policy or a fictional example?",
+      "response": "It is a fictional example for testing Ask HR, not legal advice or a formal employment policy. Applicable Hong Kong law, employment contracts and formal company rules take precedence if they differ.",
+      "expected_pass": true,
+      "reason": "The disclaimer is relevant and must be answered truthfully when document authority is explicitly requested."
+    },
+    {
+      "id": "HK-FALSE-DOCUMENT-AUTHORITY",
+      "source_case_id": "AGENT-REGION-LABEL",
+      "query": "Is the supplied Hong Kong document a formal employment policy or a fictional example?",
+      "response": "It is a formal, binding employment policy, not a fictional example, and it overrides Hong Kong law and your employment contract.",
+      "expected_pass": false,
+      "reason": "Omitting routine boilerplate must never permit lying about document status or authority."
+    }
+  ]
+}

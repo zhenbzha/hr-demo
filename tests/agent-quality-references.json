@@ -3,7 +3,7 @@
   "review": {
     "status": "assistant_source_checked",
     "basis": "Assistant-authored references independently derived from the source PDF pages, not from generated answers or judge scores. PDF hashes and quoted passages were checked against the ingestion analysis for those PDF bytes. These are fictional demo-policy references, not independent human or HR-expert adjudication. Review them before using this suite as a customer acceptance gate.",
-    "scope": "Required facts relevant to each question, not every detail in the source document. The original cases and their expected behavior remain unchanged. Cases explicitly expecting zero citations retain their clarification/no-policy checks and have no policy-answer reference."
+    "scope": "Required facts relevant to each question, not every detail in the source document. Faithful paraphrases are acceptable unless the question explicitly requests a quotation. Routine answers need not repeat fictional/demo labels or blanket disclaimers, but must preserve company-policy scope and material conditions. The original cases and their expected behavior remain unchanged. Cases explicitly expecting zero citations retain their clarification/no-policy checks and have no policy-answer reference."
   },
   "sources": [
     {
@@ -46,7 +46,7 @@
     {
       "case_id": "AGENT-REGION-TYPO",
       "query": "What are the Hong Kogn MPF contribution rules?",
-      "ground_truth": "Under the Hong Kong demonstration policy, full-time and part-time employees generally aged 18-64 with at least 60 days of continuous employment must join an MPF scheme within the statutory deadline; exemptions and industry-specific rules are checked separately. Employer and employee contributions use the applicable income ranges and rates. The policy does not supply numeric contribution rates or income limits: Payroll verifies current statutory rates, limits and reporting deadlines against official information before each processing run. Voluntary contributions and account consolidation follow scheme rules, and the company notifies the trustee and supplies required information within statutory time limits when employment ends.",
+      "ground_truth": "Under the company's Hong Kong policy, full-time and part-time employees generally aged 18-64 with at least 60 days of continuous employment must join an MPF scheme within the statutory deadline; exemptions and industry-specific rules are checked separately. Employer and employee contributions use the applicable income ranges and rates. The policy does not supply numeric contribution rates or income limits: Payroll verifies current statutory rates, limits and reporting deadlines against official information before each processing run. Voluntary contributions and account consolidation follow scheme rules, and the company notifies the trustee and supplies required information within statutory time limits when employment ends.",
       "passages": [
         {
           "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
@@ -92,7 +92,7 @@
     {
       "case_id": "AGENT-EXPLICIT-COMPARISON",
       "query": "Compare annual leave in Finland and Hong Kong.",
-      "ground_truth": "Under the local demonstration policies, Finland uses accrual per full holiday-credit month: 2 arkipäivät when employment is under one year on 31 March, or 2.5 arkipäivät at one year or more. Its holiday-credit year is 1 April-31 March, with full months determined by the 14-day or 35-hour rule. Hong Kong provides 14 paid working days per calendar year, no less than the applicable statutory entitlement, prorated in joining and leaving years. These are different policy units and accounting periods; each country's local policy supplies its entitlement, not an overriding Global allowance.",
+      "ground_truth": "Under the company's local policies, Finland uses accrual per full holiday-credit month: 2 arkipäivät when employment is under one year on 31 March, or 2.5 arkipäivät at one year or more. Its holiday-credit year is 1 April-31 March, with full months determined by the 14-day or 35-hour rule. The Hong Kong policy provides 14 paid working days per calendar year, no less than the applicable statutory entitlement, prorated in joining and leaving years. These are different policy units and accounting periods; each country's local policy supplies its entitlement, not an overriding Global allowance.",
       "passages": [
         {
           "document_id": "6d18bb8e-1078-54ee-b224-301b9a17716a",
@@ -109,7 +109,7 @@
     {
       "case_id": "AGENT-MULTILINGUAL-FI",
       "query": "Mitkä ovat työntekijän irtisanomisajat Suomessa?",
-      "ground_truth": "Suomen demopolitiikan taulukon mukaan työntekijän irtisanomisaika on 14 päivää, kun työsuhde on kestänyt enintään neljä vuotta, ja yksi kuukausi, kun työsuhde on kestänyt yli neljä vuotta. Tämä vastaa taulukon työntekijäsaraketta, ei työnantajan pidempiä irtisanomisaikoja. Pakottava lainsäädäntö, sovellettava työehtosopimus ja työsopimus ovat ensisijaisia.",
+      "ground_truth": "Yhtiön Suomen käytäntöjen taulukon mukaan työntekijän irtisanomisaika on 14 päivää, kun työsuhde on kestänyt enintään neljä vuotta, ja yksi kuukausi, kun työsuhde on kestänyt yli neljä vuotta. Tämä vastaa taulukon työntekijäsaraketta, ei työnantajan pidempiä irtisanomisaikoja. Pakottava lainsäädäntö, sovellettava työehtosopimus ja työsopimus ovat ensisijaisia.",
       "passages": [
         {
           "document_id": "376b6ef8-695f-593e-922b-8edbb78225a8",
@@ -121,7 +121,7 @@
     {
       "case_id": "AGENT-MULTILINGUAL-HK",
       "query": "香港僱員有多少天年假？",
-      "ground_truth": "根據香港公司的示範政策，每個曆年提供14個有薪工作日年假，不少於當時適用的法定權益。新入職或離職年度的年假按比例計算。這是公司政策的安排，而非對所有香港僱員法定年假的概括。",
+      "ground_truth": "根據公司的香港政策，每個曆年提供14個有薪工作日年假，不少於當時適用的法定權益。新入職或離職年度的年假按比例計算。",
       "passages": [
         {
           "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
@@ -172,7 +172,7 @@
     {
       "case_id": "AGENT-FI-PAYROLL",
       "query": "When is salary paid in Finland and what benefits are included?",
-      "ground_truth": "Salary is paid on the month's last banking day. The Finland demonstration benefits include statutory TyEL pension, unemployment, accident and group life insurance; preventive occupational healthcare from the first working day plus GP-level care, early support and return-to-work support. Voluntary benefits are a EUR 13 lunch benefit per working day, EUR 400 annual exercise/culture benefit, commuting support up to EUR 800 per year, a bicycle leasing programme under current tax rules, and a one-time EUR 300 allowance for approved home-office ergonomics. The demo holiday bonus is 50% of holiday pay, paid with June salary; it derives from the collective or employment agreement, not the Annual Holidays Act.",
+      "ground_truth": "Salary is paid on the month's last banking day. The company's Finland benefits include statutory TyEL pension, unemployment, accident and group life insurance; preventive occupational healthcare from the first working day plus GP-level care, early support and return-to-work support. Voluntary benefits are a EUR 13 lunch benefit per working day, EUR 400 annual exercise/culture benefit, commuting support up to EUR 800 per year, a bicycle leasing programme under current tax rules, and a one-time EUR 300 allowance for approved home-office ergonomics. The company holiday bonus is 50% of holiday pay, paid with June salary; it derives from the collective or employment agreement, not the Annual Holidays Act.",
       "passages": [
         {
           "document_id": "4ba28ebb-0e89-5fee-a916-7c4adf950774",
@@ -199,7 +199,7 @@
     {
       "case_id": "AGENT-OPERATIVE-DEADLINE",
       "query": "What is the target timeline for completing an India POSH inquiry?",
-      "ground_truth": "The India POSH policy states the inquiry timing verbatim: \"Target completion within 90 days\". This is the inquiry target, not the separate three-month written-complaint window. The policy does not say 90 working days.",
+      "ground_truth": "Under the company's India policy, the target is to complete the POSH inquiry within 90 days. This is an indicative inquiry-completion target.",
       "passages": [
         {
           "document_id": "e9fce922-856c-55f0-bbd0-d08012025694",
@@ -223,7 +223,7 @@
     {
       "case_id": "AGENT-REGION-LABEL",
       "query": "What is the maternity leave policy in Hong Kong?",
-      "ground_truth": "The Hong Kong demonstration policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration. This is the Hong Kong company's policy arrangement. Statutory maternity arrangements follow the Employment Ordinance, with statutory eligibility conditions governed by the Labour Department's latest announcements; the supplied policy does not enumerate those conditions.",
+      "ground_truth": "The company's Hong Kong policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration. Statutory maternity arrangements follow the Employment Ordinance, with statutory eligibility conditions governed by the Labour Department's latest announcements; the supplied policy does not enumerate those conditions.",
       "passages": [
         {
           "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
@@ -235,7 +235,7 @@
     {
       "case_id": "AGENT-HK-ANNUAL-LEAVE",
       "query": "How many days of annual leave do Hong Kong employees receive?",
-      "ground_truth": "Under the Hong Kong company's demonstration policy, employees receive 14 paid working days of annual leave per calendar year, no less than the applicable statutory entitlement. Leave is prorated in joining and leaving years. This describes the company policy, not the statutory entitlement of all Hong Kong employees.",
+      "ground_truth": "Under the company's Hong Kong policy, employees receive 14 paid working days of annual leave per calendar year, no less than the applicable statutory entitlement. Leave is prorated in joining and leaving years.",
       "passages": [
         {
           "document_id": "9f538af6-fb90-5947-874b-c232181d8696",

@@ -34,6 +34,7 @@ from .foundry import (
     task_adherence_criterion,
     wait_for_run,
 )
+from .references import policy_evaluation_query
 
 
 def write_summary(path: Path, summary: dict[str, Any]) -> None:
@@ -125,7 +126,7 @@ def run_stage(
     summary_path: Path,
     case_ids: set[str],
     label: str,
-    inline_rows: list[dict[str, Any]] | None = None,
+    inline_rows: list[dict[str, Any]],
     schema: DataSourceConfigCustom | None = None,
 ) -> None:
     """
@@ -145,7 +146,6 @@ def run_stage(
         Judge configuration, polling interval, and timeout.
     summary : dict
         Mutable report with agent name/version and dataset version.
-        Must also contain ``dataset_id`` when inline rows are not supplied.
     summary_path : pathlib.Path
         Local JSON report rewritten as this stage progresses.
     case_ids : set of str
@@ -153,9 +153,8 @@ def run_stage(
     label : str
         Report key for this stage. ``expected_behavior`` enables
         validation against the configured HR behavior threshold.
-    inline_rows : list of dict or None, default=None
-        Answer rows to submit directly. When omitted, use the registered
-        dataset identified in ``summary``.
+    inline_rows : list of dict
+        Answer rows to submit directly.
     schema : DataSourceConfigCustom or None, default=None
         Schema describing the submitted rows. Defaults to ``dataset_schema()``.
 
@@ -168,7 +167,6 @@ def run_stage(
     evaluation, run = start_run(
         client,
         name=name,
-        dataset_id=summary["dataset_id"] if inline_rows is None else None,
         criteria=criteria,
         metadata={
             "agent": summary["agent"]["name"],
@@ -342,16 +340,15 @@ def score_dataset(
     summary_path: Path,
     case_ids: set[str],
     request_timeout: float = 60,
-    agent_inputs: bool = False,
     policy_case_ids: set[str] | None = None,
 ) -> None:
     """
     Submit collected answers for built-in and HR-specific Foundry scoring.
 
-    Register or reuse a dataset in Foundry, create scoring runs and an HR
-    evaluator version, and update the report. Uploaded data is retained under
-    Foundry's retention settings. Deleting the local JSONL file leaves the
-    uploaded data in Foundry.
+    Register or reuse a dataset in Foundry for lineage, submit its local rows
+    inline to scoring runs, create an HR evaluator version, and update the
+    report. Uploaded data is retained under Foundry's retention settings.
+    Deleting the local JSONL file leaves the uploaded data in Foundry.
 
     Parameters
     ----------
@@ -377,15 +374,13 @@ def score_dataset(
         IDs of all cases submitted for scoring.
     request_timeout : float, default=60
         OpenAI-client request timeout in seconds, capped at 60.
-    agent_inputs : bool, default=False
-        Score rows with their recorded conversations. The uploaded dataset
-        is kept as a record of the inputs; scoring uses rows sent directly.
-        When False, score the registered dataset using its question fields.
     policy_case_ids : set of str or None, default=None
         Enable the PDF-reference profile for this predeclared subset of cases.
-        All cases receive HR behavior scoring; only this subset receives
-        Groundedness and Response Completeness. None preserves the legacy
-        diagnostic profile used by benchmark callers.
+        All cases receive HR behavior and source-faithfulness scoring; only
+        this subset receives Response Completeness. None selects the benchmark
+        diagnostic profile, which requires recorded ``agent_query``
+        conversations in every row. The PDF-reference profile also uses these
+        conversations when supplied; if any row supplies one, all must do so.
     """
     definition = rubric_definition(settings.pass_threshold)
     fingerprint = rubric_fingerprint(settings.pass_threshold)
@@ -400,25 +395,34 @@ def score_dataset(
     summary["rubric_minimum_dimension_score"] = MIN_RUBRIC_DIMENSION_SCORE
     summary["rubric_definition"] = definition
     summary["hr_score_format"] = "native_weighted_rubric_0_to_1"
-    inline_rows = None
-    if agent_inputs or policy_case_ids is not None:
-        dataset_bytes = dataset_path.read_bytes()
-        inline_rows = [
-            json.loads(line) for line in dataset_bytes.decode("utf-8").splitlines()
-        ]
-        if agent_inputs and (not inline_rows or any(
-            not isinstance(row, dict) or "agent_query" not in row for row in inline_rows
-        )):
-            raise ValueError("Captured-input scoring requires agent_query in every row")
-        summary["scoring_inputs"] = {
-            "source": (
-                "inline_pdf_reference_dataset"
-                if policy_case_ids is not None
-                else "inline_verified_captured_agent_query"
-            ),
-            "sha256": hashlib.sha256(dataset_bytes).hexdigest(),
-            "registered_dataset_usage": "capture_lineage_only",
-        }
+    dataset_bytes = dataset_path.read_bytes()
+    inline_rows = [
+        json.loads(line) for line in dataset_bytes.decode("utf-8").splitlines()
+    ]
+    agent_inputs = policy_case_ids is None or any(
+        isinstance(row, dict) and "agent_query" in row for row in inline_rows
+    )
+    if agent_inputs and (not inline_rows or any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("agent_query"), list)
+        or not row["agent_query"]
+        for row in inline_rows
+    )):
+        raise ValueError("Captured-input scoring requires nonempty agent_query in every row")
+    summary["scoring_inputs"] = {
+        "source": (
+            "inline_pdf_reference_dataset"
+            if policy_case_ids is not None
+            else "inline_verified_captured_agent_query"
+        ),
+        "rubric_query_field": (
+            "agent_query" if agent_inputs
+            else "policy_query" if policy_case_ids is not None
+            else "query"
+        ),
+        "sha256": hashlib.sha256(dataset_bytes).hexdigest(),
+        "registered_dataset_usage": "capture_lineage_only",
+    }
     if policy_case_ids is not None:
         identifiers = [row["case_id"] for row in inline_rows]
         if (
@@ -428,22 +432,41 @@ def score_dataset(
         ):
             raise ValueError("Policy scoring must retain every declared case exactly once")
         for row in inline_rows:
+            if row.get("policy_query") != policy_evaluation_query(row):
+                raise ValueError("Policy query must preserve the captured question and context")
             truth = row.get("ground_truth")
             if not isinstance(truth, str) or bool(truth.strip()) != (
                 row["case_id"] in policy_case_ids
             ):
                 raise ValueError("Reference answers do not match the declared policy cases")
-        summary["evaluation_profile"] = "pdf_reference_native_demo_v2"
+        summary["evaluation_profile"] = "pdf_reference_native_demo_v4"
         summary["evaluation_plan"] = {
             "behavior_case_ids": sorted(case_ids),
             "policy_answer_case_ids": sorted(policy_case_ids),
             "clarification_or_no_policy_case_ids": sorted(case_ids - policy_case_ids),
+            "gating_policy_metrics": ["response_completeness"],
+            "source_faithfulness": {
+                "evaluator": "hr_rubric",
+                "dimension": "policy_scope_and_evidence",
+                "minimum_score": MIN_RUBRIC_DIMENSION_SCORE,
+            },
+            "retired_evaluators": [{
+                "name": "builtin.groundedness",
+                "replacement": "hr_rubric.policy_scope_and_evidence",
+                "reason": (
+                    "Generic judge conflicts with the demo contract on routine "
+                    "boilerplate and translated boundaries. The replacement is "
+                    "calibrated on source-backed positive and negative controls."
+                ),
+            }],
             "scope_basis": (
                 "Selected from test expectations before grading, not from answers or scores."
             ),
             "scored_contract": (
                 "Fixed native rubric with a dimension-score floor, deterministic "
-                "citation checks, and applicable PDF-reference metrics. No per-case "
+                "citation checks, and PDF-reference completeness. The rubric's "
+                "policy_scope_and_evidence dimension gates factual support. Generic "
+                "Groundedness is retired from this profile, not silently passed. No per-case "
                 "free-text assertion evaluator or internal execution verification."
             ),
         }
@@ -511,7 +534,10 @@ def score_dataset(
         run_stage(
             client=client,
             name=evaluation_name + " - expected behavior",
-            criteria=[rubric_criterion(evaluator, settings, agent_inputs=agent_inputs)],
+            criteria=[rubric_criterion(
+                evaluator, settings, agent_inputs=agent_inputs,
+                policy_answers=policy_case_ids is not None,
+            )],
             settings=settings,
             summary=summary,
             summary_path=summary_path,
@@ -586,6 +612,9 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
     dict
         Per-case pass/fail and failed requirements. Clarification/no-policy
         cases must pass their HR and citation checks; they never pass by omission.
+        Source faithfulness is gated by the calibrated native rubric and its
+        minimum score per dimension. Generic Groundedness is not part of this
+        profile; legacy/extra metrics are rejected rather than ignored.
 
     Raises
     ------
@@ -611,9 +640,15 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
     for case in behavior:
         failures[case["case_id"]].extend(case["failed_requirements"])
     for case in policy:
-        failures[case["case_id"]].extend(
-            result["name"] for result in case["results"] if result["passed"] is not True
-        )
+        metrics = {result["name"]: result for result in case["results"]}
+        if (
+            len(case["results"]) != 1
+            or set(metrics) != {"response_completeness"}
+            or any(type(result.get("passed")) is not bool for result in metrics.values())
+        ):
+            raise ValueError("HR assessment has missing, duplicate, or invalid policy metrics")
+        if not metrics["response_completeness"]["passed"]:
+            failures[case["case_id"]].append("response_completeness")
     results = [
         {
             "case_id": identifier,
@@ -626,11 +661,14 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
         for identifier, failed in failures.items()
     ]
     return {
+        "profile": "pdf_reference_native_demo_v4",
         "definition": (
             "Limited native demo acceptance: fixed rubric plus per-dimension floor "
-            "and citation checks; policy answers also require Groundedness and "
-            "Response Completeness. Not exhaustive HR verification or evaluation "
-            "of per-case free-text assertions."
+            "and citation checks; policy answers also require Response Completeness. "
+            "The calibrated policy_scope_and_evidence dimension gates source "
+            "faithfulness; generic Groundedness is retired from this profile. "
+            "Not exhaustive HR verification or evaluation of "
+            "per-case free-text assertions."
         ),
         "passed": sum(case["passed"] for case in results),
         "failed": sum(not case["passed"] for case in results),

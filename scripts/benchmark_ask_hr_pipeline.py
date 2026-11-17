@@ -539,7 +539,6 @@ def score_collected_rows(
             summary_path=args.output,
             case_ids={row["case_id"] for row in rows},
             request_timeout=args.request_timeout,
-            agent_inputs=True,
         )
 
 
