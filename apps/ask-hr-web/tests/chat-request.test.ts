@@ -4,27 +4,33 @@ import { describe, it } from "node:test";
 import { parseChatRequest } from "@/lib/validation/chat-request";
 
 describe("parseChatRequest", () => {
-  it("accepts a current question and previous response ID", () => {
-    assert.deepEqual(
-      parseChatRequest({
-        message: " Question ",
-        previousResponseId: "resp_abc-123",
-      }),
-      {
-        message: "Question",
-        previousResponseId: "resp_abc-123",
-      },
-    );
+  it("accepts standard and Foundry-hosted response IDs unchanged", () => {
+    for (const previousResponseId of [
+      "resp_abc-123",
+      "caresp_0123456789abcdef00ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+    ]) {
+      assert.deepEqual(
+        parseChatRequest({ message: " Question ", previousResponseId }),
+        { message: "Question", previousResponseId },
+      );
+    }
   });
 
   it("rejects malformed previous response IDs", () => {
-    assert.throws(
-      () =>
-        parseChatRequest({
-          message: "Question",
-          previousResponseId: "not-a-response",
-        }),
-      /previousResponseId is invalid/,
-    );
+    for (const previousResponseId of [
+      null,
+      42,
+      "",
+      "resp_",
+      "caresp_",
+      "not-a-response",
+      "caresp_test/invalid",
+      "caresp_test invalid",
+    ]) {
+      assert.throws(
+        () => parseChatRequest({ message: "Question", previousResponseId }),
+        /previousResponseId is invalid/,
+      );
+    }
   });
 });

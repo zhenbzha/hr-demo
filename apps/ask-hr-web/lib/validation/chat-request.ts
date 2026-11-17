@@ -24,7 +24,7 @@ export function parseChatRequest(value: unknown): ChatRequest {
   if (
     previousResponseId !== undefined &&
     (typeof previousResponseId !== "string" ||
-      !/^resp_[A-Za-z0-9_-]+$/.test(previousResponseId))
+      !/^(?:ca)?resp_[A-Za-z0-9_-]+$/.test(previousResponseId))
   ) {
     throw new Error("previousResponseId is invalid");
   }
