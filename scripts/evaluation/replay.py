@@ -281,6 +281,8 @@ def load_reference_replay(
             row["agent_query"] = build_captured_agent_query(
                 original, capture["generation_instructions"]
             )
+            if "response_language" in original:
+                row["response_language"] = original["response_language"]
             if generation_input is not None:
                 generations.add(identifier)
             else:
@@ -369,7 +371,7 @@ def compare_reference_judgments(
         A required score is missing or unscored, or a result is duplicated.
     """
     observed: dict[tuple[str, str], dict[str, Any]] = {}
-    for stage in ("built_in", "expected_behavior", "task_adherence"):
+    for stage in ("built_in", "english_coherence", "expected_behavior", "task_adherence"):
         for case in summary.get(stage, {}).get("cases", []):
             for result in case["results"]:
                 key = (case["case_id"], result["name"])
@@ -377,9 +379,17 @@ def compare_reference_judgments(
                     raise ValueError(f"Duplicate judge result in replay: {key}")
                 observed[key] = result
     comparisons = []
+    skipped = []
+    coherence_not_applicable = {
+        item["case_id"]
+        for item in summary.get("coherence_applicability", {}).get("not_applicable", [])
+    }
     counts: dict[str, dict[str, int]] = {}
     for case_id, metrics in expectations.items():
         for metric, expected in metrics.items():
+            if metric == "coherence" and case_id in coherence_not_applicable:
+                skipped.append({"case_id": case_id, "metric": metric, "status": "not_applicable"})
+                continue
             result = observed.get((case_id, metric))
             if result is None or type(result["passed"]) is not bool:
                 raise ValueError(f"{case_id}/{metric}: reviewed result is unscored")
@@ -411,7 +421,10 @@ def compare_reference_judgments(
             "or held-out agent validation. Reference review identifies label provenance."
         ),
         "reference_review": summary.get("reference_review"),
-        "passed": all(item["outcome"] == "agreement" for item in comparisons),
+        "passed": bool(comparisons) and all(
+            item["outcome"] == "agreement" for item in comparisons
+        ),
+        "not_applicable": skipped,
         "metrics": counts,
         "comparisons": comparisons,
     }

@@ -170,7 +170,7 @@ def load_fixture(args, **overrides):
 
 
 class MaintainedReferenceTests(unittest.TestCase):
-    def test_v2_preserves_sources_captures_labels_and_other_references(self):
+    def test_v2_preserves_sources_captures_and_shared_reference_corrections(self):
         root = Path(__file__).parent
         original = json.loads(
             (root / "agent-evaluator-reference-cases.json").read_text(encoding="utf-8")
@@ -183,6 +183,17 @@ class MaintainedReferenceTests(unittest.TestCase):
         for field in ("schema_version", "behavior_evaluator", "sources", "captures"):
             with self.subTest(field=field):
                 self.assertEqual(revised[field], original[field])
+        for manifest in (original, revised):
+            self.assertEqual(manifest["review"]["status"], "pending")
+            for reference in manifest["references"]:
+                if reference["case_id"] in {
+                    "AGENT-EXPLICIT-COMPARISON", "AGENT-REGION-LABEL",
+                }:
+                    self.assertIn("exactly two days is excluded", reference["ground_truth"])
+                    samples = {sample["capture"]: sample for sample in reference["samples"]}
+                    self.assertFalse(samples["revised"]["expected"]["groundedness"])
+                    self.assertFalse(samples["revised"]["expected"]["behavioral_adherence"])
+                    self.assertIn("Provisional", samples["original"]["reason"])
         original_cases = {item["case_id"]: item for item in original["references"]}
         revised_cases = {item["case_id"]: item for item in revised["references"]}
         self.assertEqual(original_cases.keys(), revised_cases.keys())
@@ -516,9 +527,20 @@ class ReferenceReplayTests(unittest.TestCase):
 
 
 class ReferenceFoundryContractTests(unittest.TestCase):
+    def test_not_applicable_coherence_is_not_counted_as_an_agreement(self):
+        summary = {
+            "coherence_applicability": {"not_applicable": [{"case_id": "finnish"}]},
+        }
+        result = replay.compare_reference_judgments(summary, {"finnish": {"coherence": True}})
+        self.assertEqual(result["comparisons"], [])
+        self.assertEqual(result["not_applicable"][0]["status"], "not_applicable")
+        self.assertFalse(result["passed"])
+        with self.assertRaisesRegex(ValueError, "unscored"):
+            replay.compare_reference_judgments(summary, {"english": {"coherence": True}})
+
     def test_native_input_mappings_and_legacy_defaults(self):
         legacy = foundry.built_in_criteria("judge")
-        self.assertEqual(len(legacy), 4)
+        self.assertEqual(len(legacy), 3)
         self.assertNotIn(
             "ground_truth", foundry.dataset_schema()["item_schema"]["properties"]
         )
@@ -548,7 +570,8 @@ class ReferenceFoundryContractTests(unittest.TestCase):
                 criteria[name]["data_mapping"]["response"], "{{item.output_items}}"
             )
         self.assertEqual(
-            criteria["coherence"]["data_mapping"]["response"], "{{item.response}}"
+            foundry.coherence_criterion("judge")["data_mapping"]["response"],
+            "{{item.response}}",
         )
         self.assertEqual(
             foundry.task_adherence_criterion("judge")["data_mapping"]["response"],
@@ -563,7 +586,7 @@ class ReferenceFoundryContractTests(unittest.TestCase):
             item["name"]: item
             for item in foundry.built_in_criteria("judge", agent_inputs=True)
         }
-        self.assertEqual(len(criteria), 4)
+        self.assertEqual(len(criteria), 3)
         for name in ("relevance", "groundedness", "intent_resolution"):
             with self.subTest(name=name):
                 self.assertEqual(

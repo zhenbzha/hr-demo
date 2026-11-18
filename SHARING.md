@@ -35,6 +35,9 @@ evaluation, prompt-optimization loop, or deployment step.
 - `scripts\evaluation\foundry.py`: Foundry SDK scoring and result interpretation.
 - `scripts\evaluation\runner.py`: shared dataset submission, polling, and result
   persistence for hosted-agent evaluation and the performance benchmark.
+- `scripts\check_evaluation_judge.py`: optional frozen-rule check of the grader
+  using authored good/bad answers in `tests\agent-quality-judge-checks.json`;
+  this does not invoke an agent.
 
 For a future two-PDF handoff, the runtime source is the two entry points,
 `scripts\json_output.py`, both module directories including their `__init__.py`
@@ -44,8 +47,11 @@ PDF in their regional folders, plus evaluation cases and a PDF-backed reference
 file appropriate to those policies (`tests\agent-quality-references.json` is
 the full-corpus example). No ingestion source manifest is required.
 Keep this guide and the offline regression tests with the source.
+Include the optional judge-check script and its manifest when demonstrating how
+to check the evaluator itself. Its source references require the specific Global
+handbook and Hong Kong leave-policy PDFs named in that manifest.
 
-The existing production inputs still contain 13 PDFs and 17 agent-quality
+The existing production inputs contain 13 PDFs and 18 agent-quality
 cases. Reducing a future handoff must not reduce production coverage. The web
 app, hosted-agent implementation, benchmark scripts, deployment state, caches,
 and generated results are not prerequisites for these two scripts. Evaluation
@@ -60,6 +66,10 @@ into the project-local `.venv`:
 uv sync --locked --extra evaluation
 az login
 ```
+
+The evaluation extra requires stable `azure-ai-projects>=2.11.0`; the lockfile
+selects 2.11.0, matching the current manual-rubric sample's minimum. This is the
+root evaluation environment, not an upgrade of the separate agent runtime.
 
 On Microsoft-managed devices, use the approved package feed:
 
@@ -395,9 +405,19 @@ Optional labels are `ASK_HR_KNOWLEDGE_BASE`, `ASK_HR_EVAL_DATASET_NAME`, and
 that it serves the supplied version label; the report distinguishes this from
 a versioned endpoint.
 
+For a machine signed in to multiple Azure subscriptions, set
+`AZURE_SUBSCRIPTION_ID` or pass `--subscription`. The runner uses the documented
+[`AzureCliCredential(subscription=...)`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.azureclicredential?view=azure-python)
+parameter for collection and scoring without changing shared Azure CLI defaults.
+If omitted, the SDK uses the current Azure CLI account.
+
 `--model-deployment` overrides the judge environment setting. Existing callers
 can still use `AZURE_AI_MODEL_DEPLOYMENT_NAME` as a fallback, but set the dedicated
-judge variable to keep GPT-6.1 Sol fixed when generation uses GPT-6 Astra.
+judge variable to `ask-hr-gpt-5.4`. GPT-5.4 is a
+[documented supported rubric judge](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rubric-evaluators#choose-an-llm-judge-model).
+It is separate from GPT-6 Astra generation and the GPT-6.1 Sol Activity POC.
+Model support does not guarantee correct judgments; review the latest
+[judge-check findings](#evaluation-limitations) before using acceptance scores.
 
 ```powershell
 uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py
@@ -408,8 +428,8 @@ of generic relevance, intent-resolution, coherence and groundedness scores:
 
 | Scope | Checks |
 |---|---|
-| All 17 cases | Native HR rubric, application dimension-score floor, and deterministic citation checks |
-| 13 policy-answer cases | Response Completeness against independent PDF references |
+| All 18 cases | Native HR rubric, application dimension-score floor, and deterministic citation checks |
+| 14 policy-answer cases | Response Completeness against PDF-derived references |
 | Four cases explicitly expecting zero citations | Fixed rubric's clarification/no-policy checks and zero citations; no invented policy reference answer |
 
 Scope is determined from the test expectations **before grading**, never from
@@ -418,48 +438,65 @@ policy answer cannot escape policy-answer scoring. A clarification/no-policy
 case must still pass the rubric, its dimension-score floor, and citation checks.
 These are deliberately limited demo checks, not a guarantee of every
 scenario-specific requirement or overall HR correctness.
-The rubric's calibrated `policy_scope_and_evidence` dimension is the factual
-support gate, replacing generic Groundedness in this active suite. The generic
-judge repeatedly treated intentionally omitted demo boilerplate and an inclusive
-Chinese numerical boundary as errors. It is retired from the v4 profile, not
-left as a permanently failing diagnostic or silently marked passed. All 17 cases,
-including the disputed maternity answer, remain. This project-specific choice follows
-[Microsoft's guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent)
-to use an agent-specific rubric as the primary measure and layer in other
-evaluators. Source-faithfulness testing is not removed:
-unsupported quantities, units, scope, eligibility, or guarantees must still fail
-the calibrated rubric. Missing, duplicate, or unscorable active results remain
-errors. Old generic scores remain in their original historical reports.
+The **v6** rubric's `policy_scope_and_evidence` dimension checks correctness
+against the PDF evidence and expected facts derived from those PDFs.
+The PDF evidence takes precedence over the answer key. This is not solely a
+groundedness measurement. Unsupported claims still fail;
+honestly explaining that the policy omits a detail must not be penalized for
+failing to invent it. All eighteen cases are scored. Weights, the native threshold
+and the dimension floor are unchanged.
+
+Evaluation-only interpretation fields are not supported. The Hong Kong notice
+case asks about a week of annual leave and expects a request generally seven days
+in advance, based on the unchanged PDF quotation on page 3. It replaces the
+exact-two-day question without asserting whether that boundary is inclusive or
+exclusive. PDFs, agent instructions and captured evidence remain unchanged.
+
+Generic Groundedness is outside v6 acceptance; the optional judge-check
+diagnostic still receives source evidence without the answer key. Passing v6
+does not validate the older source-only graders. Their failed results, including
+the withdrawn post-hoc label-only comparison, remain unchanged.
 
 `--references` defaults to `tests\agent-quality-references.json`. This file
 contains independently PDF-derived expected answers, source PDF hashes,
-physical page numbers, quotations, and the review declaration. The loader
-rejects changed PDFs, changed questions, and missing/duplicate references before
+physical page numbers, quotations and review declarations. The loader
+rejects evaluation-only interpretations, changed PDFs, changed questions, and
+missing/duplicate references before
 invoking the agent. References were assistant-authored and source-checked, not
-independently adjudicated by an HR expert; review them before using this suite
+independently adjudicated by an HR expert. Review the references before using this suite
 as a customer acceptance gate. Do not copy model answers into the references
 or revise references merely to make a run pass. When sharing a smaller corpus,
-curate matching cases, reference answers, and source entries.
+curate matching cases, reference answers and source entries.
 The loader validates hashes and manifest coverage, not whether every quotation
 occurs on its stated page. Those quotes were source-checked for the frozen demo
 references; repeat that source review if references change.
 
 The script captures answers and citations, retains the complete evaluation
 dataset, and submits inline rows using the official SDK pattern. The uploaded
-dataset records all 17 cases; the policy-answer run receives the predeclared
-13-case subset. Without a recorded generation conversation, the native rubric
-receives `policy_query`: evaluation-only JSON containing the original question
-and unchanged cited policy context. This is not a fabricated agent transcript.
-The scorer rejects a missing or altered copy of that context before submission.
-Recorded conversations are used unchanged when available. Hosted collection
-does not capture tool definitions and supplies `tool_definitions: []`.
-Response Completeness receives the independent
-`ground_truth` and unchanged answer text. This follows
+dataset records all 18 cases; the policy-answer run receives the predeclared
+14-case subset. The native rubric receives `policy_query`: evaluation-only JSON
+with separate `question`, `policy_context` and `reference_answer` fields.
+The source context is unchanged; reference
+fields are never represented as evidence supplied to the agent. This JSON envelope
+is application-defined use of the documented `query` input, not a separately
+documented rubric reference-answer field. This query is
+used consistently for local and hosted policy grading. Captured conversations
+and tool items remain in the dataset for audit, but the native rubric's response
+mapping is **`{{item.response}}`**, the employee-facing answer text. The scorer
+rejects missing or inconsistent copies of the question, context or answer key
+before submission. Hosted collection does not capture tool definitions and
+retains `tool_definitions: []`.
+Response Completeness receives the same assistant-authored answer key as
+`ground_truth`, plus the unchanged answer text. It measures recall and does not
+independently verify wrong extra claims; the rubric is the only semantic
+correctness gate in this profile. HR must review the shared references before
+acceptance use. This follows
 [Microsoft's RAG evaluator guidance](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rag-evaluators)
 and the official
 [Response Completeness sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/agentic_evaluators/sample_response_completeness.py).
-No reference answer, expected control decision, or fabricated system instruction
-is included in the rubric's query.
+The PDF-derived expected answer is intentionally included in v6 correctness grading.
+Expected control pass/fail decisions, reasons and fabricated agent instructions
+are not included.
 
 Responses `function_call` and `function_call_output` items are also retained
 in the dataset using the documented
@@ -477,20 +514,26 @@ The following adaptations have specific HR/application requirements:
 | Adaptation | Reason |
 |---|---|
 | Collect responses with the existing authenticated caller | Ask HR requires represented-user and delegated Search authorization headers. The generic agent-target sample does not supply these headers. |
-| Use the HR behavior rubric, with policy-grounding and reference-completeness checks | Answers must follow the supplied fictional policies, local/Global precedence, and appropriate clarification or abstention. [Microsoft's agent-evaluation guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent) recommends an agent-specific rubric as the primary measure. |
+| Use the HR rubric, with reference-based correctness and completeness checks | Answers are compared with the supplied fictional policies and declared answer key, including local/Global precedence and appropriate clarification or abstention. [Microsoft's agent-evaluation guidance](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluate-agent) recommends an agent-specific rubric as the primary measure. |
 | Check returned citation IDs, regions, and page fields | Verifies required document membership, allowed/forbidden sources, citation counts, required fields and valid page ranges; it does not verify that cited text occurs on those pages. |
+
+The current [agent-target contract](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/cloud-evaluation-targets)
+and SDK target model do not document forwarding Ask HR's custom authorization
+headers. Authenticated collection therefore remains; this is not a claim that
+every undocumented service option is impossible.
 
 The HR grader is a native `EvaluatorDefinitionType.RUBRIC` evaluator, registered
 and version-pinned using the
 [official manual rubric sample](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/samples/evaluations/sample_rubric_evaluator_manual.py).
-It replaces the custom prompt-based HR grader and, in the active v4 profile,
-generic Groundedness. Response Completeness remains a separate evaluator.
+It replaces the custom prompt-based HR grader. The active v6 profile uses
+PDF-derived expected answers rather than claiming source-only Groundedness.
+Response Completeness remains a separate evaluator.
 The fixed, always-applicable dimensions are:
 
 | Dimension | Relative weight |
 |---|---:|
 | HR request handling, including correct clarification/no-policy responses | 10 |
-| Policy scope and evidence, including local/Global precedence | 5 |
+| Reference-based policy correctness, including source scope and local/Global precedence | 5 |
 | Communication quality, including the employee's language (`communication_quality`) | 2 |
 
 These dimensions, weights, and the 0.75 threshold are application choices, not
@@ -514,6 +557,10 @@ graded 2 or lower cannot be offset by stronger dimensions. Scores of 3 can
 still pass: `(5, 3, 3)` yields approximately 0.794 and meets both acceptance
 rules. This is an application rule, not a Foundry default or a service execution
 error; the raw native score and `passed` flag are preserved.
+`rubric_assessment.dimension_score_summary` reports
+`observed_minimum_score` separately from `required_minimum_score` for each
+dimension. For example, an observed minimum of 5 means every scored example
+earned 5; it does not change the required floor of 3.
 
 The application-defined dimension was renamed to `communication_quality` to
 avoid redefining the SDK's reserved residual `general_quality`. A one-row live
@@ -530,23 +577,25 @@ guarantee. Do not invent a starting date or confuse an inquiry timeline with a
 complaint-filing window. Verbatim wording is required only for an explicit
 quotation request. Company-specific entitlements need a brief company-policy
 attribution, not fictional-demo/legal boilerplate or a separate disclaimer.
-`tests\agent-quality-rubric-controls.json` contains synthetic positive and
-negative judge-calibration controls for these rules, including correct answers
-without demo disclaimers, incorrect benefits and eligibility, inclusive versus
-exclusive boundaries, and truthful versus false document-authority answers.
-Their expected decisions
-are declared before scoring and kept out of the judge inputs. They test the
-evaluator, not the agent, and are separate from the 17-case answer-quality suite.
+`tests\agent-quality-rubric-controls.json` retains sixteen legacy source-only
+controls after removal of three exact-two-day examples; it is not the active v6
+checker. `tests\agent-quality-judge-checks.json` contains fourteen current
+reference-based positive/negative examples after removal of the two related
+judge checks. Remaining expected labels are unchanged. Expected pass/fail decisions
+are declared before scoring and kept out of judge inputs; the reviewed answer
+key is deliberately supplied. These checks test the evaluator, not the agent,
+and are separate from the eighteen-case answer-quality suite. Historical reports
+retain their original inputs and counts; do not recalculate them for these smaller
+control sets.
 
-The native evaluator receives the actual question (the recorded conversation for
-local captures, including when scored against PDF references), structured
-response items, and `tool_definitions: []`. When any dataset row contains
-`agent_query`, every row must contain it; policy-reference scoring does not
-discard captured evidence in favor of a bare question.
-Without captured conversations, `policy_query` explicitly provides the original
-question and unmodified source passages. Response Completeness compares answer
-text with the independent PDF reference.
-The native rubric does not consume arbitrary `expected_behavior` or reference-answer fields:
+The native evaluator grades the employee-facing answer, not the citation
+transport or retained tool-call/result messages. Policy grading receives the
+same separate question/source/reference query for local and hosted captures.
+When any dataset row contains `agent_query`, every row must still contain it;
+those recorded conversations are retained unchanged for audit, not presented
+as if they contained the evaluation references.
+Response Completeness compares answer text with the independent PDF reference.
+The native rubric does not consume arbitrary `expected_behavior` assertions:
 the fixed dimension descriptions include HR quality checks and rules derived
 from these demo cases, including EEM/UK handling, the supported region list,
 and faithful deadline meaning. They are not a general-purpose HR rubric.
@@ -559,7 +608,8 @@ individually guaranteed. Separate citation checks and the PDF-reference
 evaluators retain their own case-specific inputs. The dataset's
 `expected_behavior` field remains capture metadata and a historical replay
 input, not a native rubric input.
-Supplied fictional policy, not external employment law, is authoritative.
+The supplied fictional PDFs, not additional interpretations or external
+employment law, define the policy facts for this check.
 The citation transport is not a Search tool execution record, so the sample's
 tool-execution evaluator is not added merely to score that transport.
 
@@ -587,11 +637,15 @@ Reports include `evaluation_plan`, reference provenance, separate
 `expected_behavior` (the retained native-stage name) and `policy_answers` stages,
 the independent `rubric_assessment`, and a combined `assessment` listing
 failed checks for every case. Native and application decisions are not
-interchanged. The `pdf_reference_native_demo_v4` profile retires generic
-Groundedness and records its replacement in `evaluation_plan.retired_evaluators`.
+interchanged. The `pdf_source_native_demo_v6` profile records
+`evaluation_plan.reference_based_correctness` and
+`scoring_inputs.contract = pdf_source_answer_text_v1`.
+It records the different scope of generic Groundedness in
+`evaluation_plan.retired_evaluators`.
 It does not reuse an old failed score as a pass: extra/legacy policy metrics
-are rejected, so old reports cannot silently become v4 results. It is **not
-directly comparable** to v3's generic diagnostic, v2's additional Groundedness
+are rejected, so old reports cannot silently become v6 results. It is **not
+directly comparable** to v5's added interpretation, v4's source-only rubric,
+v3's generic diagnostic, v2's additional Groundedness
 gate, or the historical all-generic-metrics intersection. Historical reports
 are retained unchanged. Exploratory benchmark runs also use the native HR rubric while
 retaining their generic diagnostic metrics; historical reference replay keeps
@@ -599,6 +653,14 @@ its recorded prompt evaluator. Generic scores must not be presented as overall
 HR correctness.
 When validating evaluator changes, keep positive, deliberately incorrect and
 borderline controls separate from agent results and retain raw judge decisions.
+`evaluation_scope` identifies whether answers came from the local pipeline,
+hosted endpoint, historical captures, or authored examples. The built-in
+18-case suite is labeled a calibration set, not a holdout. A custom case file
+is not automatically independent or representative.
+
+Evaluator catalog lookup uses the SDK's paged iterator. Its `limit=20` is a
+page-size request, not a 20-evaluator total cap; the SDK follows continuation
+links. No custom pagination workaround is needed.
 
 Reports are written under `.foundry\results`. The local JSONL dataset is
 temporary unless `--retain-dataset` is supplied. The dataset uploaded to
@@ -609,6 +671,342 @@ automatic rerun, optimization, or deployment.
 
 ### Evaluation limitations
 
+**Current case revision, 2026-11-17:** `AGENT-HK-LEAVE-NOTICE` replaces the
+exact-two-day question with:
+
+- Question: "I'm planning a week of annual leave in Hong Kong. How far in advance
+  should I apply?"
+- Expected answer: "You should generally submit your leave request seven days
+  in advance."
+
+The other 17 main cases and their references are unchanged: the active suite
+still has 18 cases and 14 policy references. Two related judge-check examples
+and three legacy controls are removed, leaving 14 active judge checks and
+16 legacy controls. The case edit used offline checks only; its subsequent
+live retest is reported below.
+
+The notice sentence was verified on physical page 3 of the unchanged,
+hash-verified PDF with pypdf. The replacement preserves "generally" and does
+not assert the meaning of exactly two days. The earlier exclusion came from
+review instructions and was not independently established by that quotation.
+The original DI analysis and legacy replay captures remain missing locally;
+this is not a Storage connection failure.
+
+**Live retest of the revised suite, 2026-11-17 (UTC): 17/18 passed.**
+The normal repository CLI collected all 18 fresh answers and completed both
+scoring stages with the same GPT-5.5 judge and unchanged grading rules.
+All citation checks passed **18/18** and Response Completeness passed **14/14**,
+with zero scoring-validation errors.
+
+`AGENT-HK-LEAVE-NOTICE` passed: the agent answered, "Under our Hong Kong policy,
+you should normally apply **seven days in advance** for your week of annual
+leave." The native rubric scored 1.0 with all three dimensions at 5/5;
+completeness scored 5/5. This evaluates the week-of-leave scenario, not the
+retired exact-two-day interpretation. The complete response is retained.
+
+The only reported failure was `AGENT-EEM-NO-EVIDENCE`. Asked which countries
+are included in EEM, it replied, "Which region does EEM refer to in your context?"
+The judge accepted its restraint against inventing countries but found the
+clarification circular and insufficiently informative. Its dimensions were
+`(4, 4, 3)`, scoring 0.720588 against 0.75. The quality gate exited 1; this was
+not a service outage. No score override or score-driven rerun was performed.
+
+Artifacts are in `output\agent-quality\hosted-gpt55-leave-notice-20261117`:
+`plan.json`, `frozen-inputs`, `run.log`, the retained dataset,
+`results\evaluation-summary-20261117-215541.json`, and a separate `review.json`.
+All nine frozen source/input hashes remained unchanged. The agent's latest
+version was 15 before collection; the endpoint remains unversioned, not pinned.
+This is a calibration-set result, not independent HR acceptance. GPT-5.4 remains
+the configured default; the PDFs, agent and previous reports were not changed.
+
+**Historical results below use the former inputs.** Their boundary labels and
+claims of correct detections or false passes depend on the earlier disputed
+interpretation, not a settled PDF fact. Removing those checks does not resolve
+that dispute or validate their historical judgments. The legacy v1/v2 replay
+manifests remain unchanged and pending review; they are not the current demo key.
+Old scores are preserved, not reclassified as new passes. The previous frozen
+inputs/code are also archived in `frozen-v5-files` under the v5 output directory.
+The English-language complaints mean that the grading model criticized an
+English answer for not being Chinese even though the question was in English.
+That is a grading error. It is separate from the HTTP 500/timeout that stopped
+fresh answer collection.
+
+**Frozen model comparison, 2026-11-17 (UTC): both judges matched 16/16 decisions.**
+Before the current case revision, GPT-5.4 and GPT-5.5 each scored the same sixteen
+frozen authored examples once, using native rubric version 20. Both accepted all
+eight expected passes and rejected all eight expected failures under the then-frozen
+labels, with zero scoring-validation errors. Both rejected the inclusive two-day answer,
+accepted the exclusive answer, and accepted the honest MPF limitation.
+The submitted inputs, reference manifest and rubric hashes match between runs.
+No labels, thresholds, responses or rubric text changed after scoring.
+
+GPT-5.5 was deployed only as a comparison judge: `ask-hr-gpt-5.5`, GA model version
+`2026-04-24`, GlobalStandard capacity 100, in the existing France Central account.
+The parameterized `infra\modules\evaluation-model.bicep` preserves GPT-5.4 defaults;
+the HR agents and configured default judge are unchanged. Microsoft's
+[supported rubric-judge list](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rubric-evaluators#choose-an-llm-judge-model)
+recommends both models.
+
+There is **no observed label-agreement advantage for GPT-5.5 on this set**.
+GPT-5.4's passing maternity explanation still oddly calls the English question
+and Chinese source a minor limitation while also saying English is appropriate;
+GPT-5.5's explanation correctly says the answer uses the employee's language.
+This is one calibration observation, not proof of generally reliable explanations
+or an independent holdout. No agent answers were generated in this comparison.
+The frozen plan, prepared inputs, raw reports and verified `comparison.json` are in
+`output\agent-quality\judge-model-comparison-20261117`. All 123 protected source
+and historical artifact files checked by the plan remained unchanged.
+
+The read-only Storage check showed public networking enabled, firewall default
+Allow, no private endpoints, and anonymous/Shared Key access disabled. The
+expected account-level `SecurityControl=Ignore` tag was absent; no Storage setting
+was changed. This current snapshot does not establish the cause of the earlier
+HTTP 500/timeout, which remains unknown.
+
+**Fresh full hosted GPT-5.5 run, 2026-11-17 (UTC): completed, but not accepted.**
+The normal repository CLI collected all 18 new answers from the deployed Ask HR
+Responses endpoint and completed both scoring stages. Native rubric version 21
+reported **16/18 passes**, citation checks **18/18**, and Response Completeness
+**13/14**, with zero scoring-validation errors. Exit code 1 was the quality gate,
+not the earlier collection outage. The frozen nine source/input file hashes
+remained unchanged; no case was excluded or rerun for a better score.
+
+The reported failures were:
+
+- `AGENT-HK-TWO-DAY-NOTICE`: the agent answered **Yes**, explicitly including
+  exactly two days. The then-frozen answer key expected **No**. The rubric scored
+  0.25 with dimensions `(2, 2, 2)`; completeness scored 1/5.
+- `AGENT-EEM-NO-EVIDENCE`: the answer was only "Could you please specify which
+  region you mean by 'EEM'?" The judge found this circular and insufficiently
+  informative, scoring 0.720588 with dimensions `(4, 4, 3)`, below 0.75. It did
+  not invent a country list; this is a communication/handling criticism.
+
+**The separate review labeled two additional answers as false passes using the
+same exclusion.** The comparison and maternity answers say "two days or more",
+and GPT-5.5 gave both 1.0. Their per-question references cover entitlement facts
+but do not contain the exclusion supplied to the direct boundary question.
+The original PDF sentence appears in all three captured contexts. Those
+false-pass claims therefore depend on the disputed answer key; they are not
+independently verified policy findings. **16/18 must not be presented as 16
+verified-correct answers.** No adjusted score or manually relabeled raw result
+is produced, and the saved review file is retained as historical commentary.
+
+This full run uses the retired boundary question and earlier answer key, not
+the replacement week-of-leave case. The English maternity answer was not penalized for
+being English in this run. The new report, retained dataset, frozen input
+snapshots, run log and separate `review.json` are under
+`output\agent-quality\hosted-gpt55-20261117`; the report is
+`results\evaluation-summary-20261117-160508.json`. The agent's latest version was
+15 before invocation, but the endpoint is unversioned and routes to its active
+version. PDFs, agent instructions, thresholds and the configured GPT-5.4 default
+are unchanged. This remains a calibration-set run, not independent HR acceptance.
+
+The frozen v6 recheck reported **7/7 of the same saved agent answers
+passing**, including the comparison, maternity and MPF answers. This historical
+number does not establish seven verified-correct answers. Citation checks
+and Response Completeness also passed **7/7**, with no scoring-validation errors.
+No new agent answers were generated. The rubric, thresholds, weights, saved
+answers and PDF bytes stayed fixed throughout this recheck.
+
+The separate grader checks reported **15/16** agreement against the then-inclusive
+labels. That count is preserved, not recomputed against today's labels.
+The grader rejected both `CHECK-TWO-DAY-BOUNDARY-A` and the opposite answer in
+`CHECK-TWO-DAY-BOUNDARY-B`, using conflicting readings of the same sentence.
+The later label changes do not establish consistent grading or justify saying
+that every judge decision was right.
+One control explanation also still confuses the
+policy's language with the question's language. No Chinese-language demand
+appeared in the seven saved-answer results, but this single run does not
+establish that language grading is reliable. The maternity answer scored
+exactly the 0.75 threshold.
+
+The one failed grader check is preserved and its command exited nonzero; no
+labels or scores were changed after seeing the results, and no retry was made
+to obtain a pass. All sixteen examples are known regressions, not holdout
+validation. This followed several rubric revisions on the same material; all
+seven-answer regrades and sixteen-control checks are calibration only, not a
+fresh full hosted run or independent validation. Artifacts are under
+`output\agent-quality\pdf-facts-recalibration-20261117`: `plan.json` freezes the
+rules and inputs; `controls-prepared` retains the unscored inputs;
+`controls-scored\report.json` contains rubric version 18 and the disagreement;
+`saved-hosted-regrade\report.json` contains rubric version 19 and the seven
+saved-answer results. The SDK driver and exact datasets are retained.
+
+**Superseded v5 reference-based recalibration, 2026-11-17 (UTC): 16/16 grader decisions
+matched; saved-answer acceptance was 5/7. This is not a fresh hosted baseline.**
+
+Native rubric version 16 matched all twelve known-topic control labels and all
+four labels on two newly authored questions. It accepted the honest MPF
+limitation, rejected the invented contribution rate, and applied the explicit
+user-confirmed strict two-day interpretation. It also preserved the separate
+inclusive sixty-day MPF service threshold. The newly authored questions reuse
+existing source-checked passages; they are not independent HR holdout validation.
+The answer key and interpretation notes were intentionally supplied, so these
+results do not prove that the earlier source-only judges improved.
+
+The first submission was rejected **before grading** because the service requires
+`tool_definitions` to be mapped when that field is present in the dataset.
+Restoring that required mapping did not restore tool-call/results as answer text.
+The rubric, input rows, references, labels and thresholds stayed unchanged for the
+corrected submission. The initial incomplete report and error are preserved.
+
+A fresh hosted collection was attempted but could not finish: the first case
+returned, then the comparison request returned HTTP 500 and timed out after the
+caller's retry. There is no scored seven-case result from that attempt.
+Instead, all seven answers from the earlier completed
+`source-language-recalibration-20261117` capture were regraded together through
+the repository's existing `score_dataset` SDK path, using native rubric version
+17. The source report/dataset hashes and case hash were verified; questions,
+answers, context, citations, response IDs and tool items were unchanged.
+Citation checks were recomputed. Both model-scoring stages were new; no old
+model scores or newly collected partial answers were mixed into this result.
+The retained SDK driver is `regrade_saved_hosted.py` alongside the artifacts,
+not the normal fresh-collection CLI or a new deployed-agent invocation.
+
+Native and combined acceptance passed **5/7**, citations **7/7**, and Response
+Completeness **7/7**, with no scoring-validation errors. MPF passed without
+inventing rates; the earlier tool-metadata communication penalties disappeared.
+`AGENT-EXPLICIT-COMPARISON` scored **0.308824** with dimensions `(2, 2, 4)`;
+`AGENT-REGION-LABEL` scored **0.279412** with `(2, 2, 3)`. Both retained answers say
+"two days or more", conflicting with the then-frozen strict-boundary reference.
+The review treated these as correct detections under that reference. The
+exclusion was not independently established by the PDF quotation, so these
+remain recorded grading outcomes rather than verified policy-error findings.
+The agent did not receive an extra instruction. The separate v5 interpretation
+mechanism is retired.
+
+**Remaining judge limitation:** some explanations still incorrectly penalize
+English despite an English question. The maternity explanation explicitly
+expects Traditional Chinese; other reasons contradict themselves about language.
+Those scores and reasons are preserved, not corrected by hand. The two
+reference-boundary failures would remain even with a perfect communication
+score. Control agreement therefore does not establish that every dimension's
+reasoning is reliable, or justify unattended customer acceptance.
+
+Artifacts are under
+`output\agent-quality\reference-based-recalibration-20261117`:
+`plan.json` and `retry-plan.json` freeze the inputs and service-mapping correction;
+`first-attempt-failure.json` records the validation error;
+`controls-retry\report.json` holds the sixteen control verdicts;
+`hosted-collection-failure.json` records the observed HTTP error and timeout;
+`hosted-retry\results\evaluation-summary-20261117-120335.json` is the incomplete
+fresh collection; and `saved-hosted-regrade\report.json` contains the separate
+five-of-seven saved-answer result, with `responses_regenerated: 0`.
+Exact datasets, prepared provenance and the SDK driver are retained.
+The saved-answer command returned a failing acceptance exit status; no threshold,
+score, PDF or deployed agent was changed to obtain a pass.
+
+**Earlier v4 source/language recalibration, 2026-11-17 (UTC): did not pass.**
+The revised rubric was frozen before fresh GPT-5.4 scoring. Ten existing authored
+controls matched **8/10** source-based labels with native rubric version 13:
+6/6 originally new-question examples and 2/4 regression examples. The grader
+rejected the inclusive two-day answer and accepted the exclusive answer.
+Those two decisions agree with the subsequently confirmed owner rule; the old
+labels were wrong. The recorded 8/10 is not retrospectively changed or promoted
+to a new validation result. Some reasons still penalize English despite an English
+question and the clarified language criterion. Generic Groundedness and the
+older nineteen-control collection were not rerun.
+
+Seven existing hosted cases were selected before collection: the five whose
+earlier reasons incorrectly considered source/country language, plus the Finnish
+and Traditional Chinese questions. The normal repository CLI collected seven
+new responses and used native rubric version 14. **Native passes: 4/7; combined
+acceptance: 3/7; citation checks: 7/7; Response Completeness: 7/7.** Both scoring
+stages completed without validation errors. The two non-English answers passed,
+but the maternity case still failed; this is not a new seventeen-case baseline.
+
+For `AGENT-FI-TIME-ATTENDANCE`, `AGENT-REGION-LABEL` and
+`AGENT-HK-ANNUAL-LEAVE`, the judge assigned communication quality 2/5 because it
+treated separate citation tool calls/results as text shown to the employee.
+The saved answer text exactly matches the assistant text parts and does not
+contain those tool items. That run's native mapping supplied all structured
+output items, not just that answer text. The annual-leave case passed the native
+aggregate but failed the unchanged per-dimension floor. `AGENT-REGION-TYPO` also
+received communication quality 2/5: its reason requests more concrete figures
+even though the policy does not supply the rates or limits. These judgments
+require review, not automatic acceptance as agent defects or score overrides.
+
+The pre-run selection and hashes are in
+`output\agent-quality\source-language-recalibration-20261117\plan.json`.
+The same directory contains `controls\report.json`, exact `controls\inputs.jsonl`,
+and `hosted\results\evaluation-summary-20261117-103208.json` with its retained
+dataset. Both commands returned a failing exit status. PDFs, reference labels,
+control answers, weights and thresholds stayed frozen during scoring; no reruns
+were made to seek a passing result. This is known-example recalibration, not
+independent validation. **Grader reliability remains unresolved; these results
+must not be presented as a successful fix or unattended customer acceptance.**
+
+**Earlier full hosted-agent run, 2026-11-17 (UTC): 16/17 overall passed.**
+The repository CLI collected 17 new answers from the deployed Ask HR Responses
+endpoint and scored them with GPT-5.4. Native rubric/application acceptance
+passed 16/17, citation checks passed 17/17, and Response Completeness passed
+13/13. Both scoring stages completed with no validation errors. The acceptance
+gate returned exit code 1; this was a scored failure, not a service error.
+Authentication selected the demo subscription without changing shared Azure CLI
+defaults; the agent, scoring code, rubric, thresholds and reference labels were
+not changed during this run.
+
+The failing case was `AGENT-REGION-LABEL` (Hong Kong maternity leave).
+Its dimension scores were `(4, 4, 3)`, giving **0.720588** against the **0.75**
+native threshold. The judge questioned the use of general leave-application
+procedures for maternity leave. Its communication explanation also incorrectly
+treated Traditional Chinese as expected for a Hong Kong question, although the
+employee asked in English. The supplied context contains the general application
+section and explicit maternity protections; the applicability criticism needs
+review rather than automatic acceptance or score override.
+
+Both the maternity and Finland/Hong Kong comparison answers say "two days or
+more". Earlier documentation alternately called that wording correct and
+incorrect as the reference interpretation changed; neither claim establishes
+independently verified PDF meaning. The language-related judgment is a separate
+grader error; the original scores and report are unchanged.
+
+Results and the exact retained dataset are under
+`output\agent-quality\hosted-gpt54-20261117T091832Z`, including
+`results\evaluation-summary-20261117-091832.json`.
+This is a fresh hosted calibration-set run, not UI testing or an independent
+holdout. The service reported latest agent version 15 before invocation, but the
+configured endpoint routes to the active version; the report correctly retains
+the version as an operator-supplied label, not a pinned-version guarantee.
+
+On **2026-11-17 (UTC)**, the frozen grader was checked using GPT-5.4 and
+`azure-ai-projects` 2.11.0, with native rubric version 11. Both the native HR
+rubric and a separate generic Groundedness comparison matched **6/6**
+predeclared labels on three new questions, each with a correct and deliberately
+incorrect answer. Both matched only **2/4** labels on the known regression
+examples. The maternity/disclaimer pair matched; the two-day boundary pair
+did not: each grader rejected the inclusive answer and accepted the exclusive
+answer, contrary to the reference labels used then. Those boundary decisions
+match the subsequently confirmed policy meaning; the labels were wrong.
+The historical agreement count remains unchanged and is not fresh validation.
+
+The report is
+`output\agent-quality\judge-review-gpt54-20261117\report.json`, with the exact
+submitted `inputs.jsonl` beside it. The CLI returned a failing exit status.
+That report includes the original complete reference manifest and remains
+unchanged.
+
+**Withdrawn label-only comparison:** after inspecting the first result, the
+boundary labels were changed after seeing judge results, without a prior
+documented reference review. The derived
+`reference-review.json` is retained only as an audit artifact. Its post-hoc
+10/10 agreement was circular and is **not validation** of the grader or agent.
+The later owner confirmation establishes the expected boundary for future
+evaluation; it does not turn that post-hoc agreement into validation.
+
+For that earlier v4 rerun, the original inclusive labels were restored.
+Source PDFs, questions, control answers and historical scores were unchanged.
+The thirteen policy-answer references did not assert either boundary
+interpretation. This historical state predates the user's later explicit
+clarification used in v5; its reports are not relabeled.
+Separately, `communication_quality` was changed to explicitly use the language of the
+employee's question (or their explicit requested language), never the country
+or source-document language. Weights, the 0.75 native threshold, and the 3/5
+dimension floor are unchanged. The new rubric hash is pinned before rerunning
+known examples; the failed runs above are recalibration, not an independent holdout.
+This follows Microsoft's
+[rubric review and adjustment guidance](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rubric-evaluators#review-and-adjust-the-rubric).
+
 The v4 replacement was verified on **2026-11-16 (UTC)** with 17 freshly
 generated answers through the local production pipeline and live classification,
 Search, and generation. Native HR rubric version 10, its source-faithfulness
@@ -617,6 +1015,8 @@ dimension, and citation checks passed **17/17**; Response Completeness passed
 calibration version 9 matched **19/19** predeclared decisions, including rejecting
 incorrect benefits, eligibility, authority, and numerical boundaries. Source PDFs,
 reference answers, rubric thresholds, and dimension floors were unchanged.
+These historical counts describe the recorded judge and rubric versions, not
+validation of the revised rubric.
 The report is `output\agent-quality\hr-grounding-v4-20261116T215743Z\evaluation.json`.
 This was a fresh answer-and-scoring run, not a reassessment of old scores; it was
 not a new deployed HTTP/UI run or an independent holdout. Generic Groundedness
@@ -667,6 +1067,52 @@ context, and captured response items; local captures can additionally provide
 the recorded generation conversation.
 Consequently their native rubric scores are not directly comparable.
 
+### Frozen judge spot check
+
+`tests\agent-quality-judge-checks.json` records PDF hashes, page quotations,
+positive/negative answers and predeclared labels. It pins the existing rubric
+hash and dimension floor, so changing grading rules causes validation to fail
+before a cloud request. New-question examples and known regressions are
+reported separately. The source loader verifies hashes and reference coverage;
+page-quote accuracy still requires source review.
+The current manifest is labeled `reference_calibration` and pins both the rubric
+hash and `pdf_source_answer_text_v1` input contract. All fourteen examples have
+been scored before and are now labeled as known regressions, not new questions
+or an independent holdout. They include an honest MPF limitation versus an
+invented rate and a Global confidential-data rule. The two exact-two-day
+planned-leave examples have been removed.
+These are assistant-authored checks, not independent HR or statistical validation.
+
+Prepare locally, review the sources and expected decisions, then score into a
+different, previously nonexistent output directory:
+
+```powershell
+uv run --locked --extra evaluation python scripts\check_evaluation_judge.py `
+  --prepare-only --output-dir output\judge-check-prepared
+
+uv run --locked --extra evaluation python scripts\check_evaluation_judge.py `
+  --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+  --model-deployment $env:ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME `
+  --subscription $env:AZURE_SUBSCRIPTION_ID `
+  --compare-groundedness --output-dir output\judge-check-scored
+```
+
+The live command registers a rubric version and incurs evaluation model usage;
+it does not invoke or deploy an agent. The explicit subscription selects the
+Azure CLI credential without changing global CLI defaults. Expected decisions
+and their reasons stay out of judge inputs; only PDF-backed expected answers
+are included. A deliberately incorrect answer
+being rejected counts as agreement. Any native-rubric disagreement fails the
+command. Optional generic Groundedness receives no answer key.
+It is a source-only diagnostic, not compared against the reference-based
+correctness labels and never used to override native results.
+Preserve the first run. Revising a rubric after seeing these examples is
+recalibration, not another independent holdout check.
+For a model comparison, use the same frozen manifest with each deployed model's
+`--model-deployment` name and a distinct output directory. Verify identical
+`inputs_sha256`, rubric hashes and private expected decisions before comparing
+agreement. A higher average score is not evidence that a judge is more accurate.
+
 ### Saved-answer reference replay
 
 `--replay-cases` evaluates the judges using existing answers, not a hosted agent
@@ -676,6 +1122,15 @@ generation instructions and expected decisions for explicitly reviewed metrics.
 The original answers, policy context, citations, prompts and prior scores remain
 unchanged. It is a known-example sanity set, not an independent holdout or proof
 that the agent is ready for production.
+The v1/v2 manifests retain their recorded grading configuration, source/capture
+hashes and captured generation instructions. Their two boundary answer keys and
+provisional sample expectations retain the earlier disputed interpretation;
+this case revision does not alter or validate them. Whole-answer review is
+**pending**, which blocks scoring: original capture reports and DI
+analyses are missing locally, and recorded descriptions are insufficient for a
+fresh whole-answer audit. Restore hash-matching files and review every labeled
+metric before enabling replay. No captured report or old score is relabeled.
+Use the [current judge-check manifest](#frozen-judge-spot-check) for recalibration.
 
 Prepare the inputs without Azure requests, review the critical facts and labels,
 then record that review in the manifest before scoring:
@@ -702,7 +1157,9 @@ present; they are not distributed as ordinary repository fixtures.
 
 The replay uses the documented native Foundry contracts:
 
-- Coherence retains question/answer inputs.
+- Coherence retains question/answer inputs, but only for actual responses
+  explicitly reviewed as English. Non-English or unreviewed answers are
+  not applicable, not passes or failures.
 - Groundedness retains the actual captured policy context. Relevance,
   groundedness, and intent resolution receive the original system instructions
   and generation input when a generation turn was captured. Message content uses
@@ -769,8 +1226,9 @@ and [native task-adherence sample](https://github.com/Azure/azure-sdk-for-python
 
 ## Combined performance and agent evaluation
 
-`scripts\benchmark_ask_hr_pipeline.py` now always runs the same Foundry SDK
-evaluators on the answers it times. Use the agent's existing virtual environment
+`scripts\benchmark_ask_hr_pipeline.py` normally runs the same Foundry SDK
+evaluators on the answers it times. `--capture-only` instead saves unscored
+answers for review. Use the agent's existing virtual environment
 so classification and generation use its locked runtime dependencies. Use
 `--evaluation-python` to run scoring in the root project's evaluation environment
 (`uv sync --locked --extra evaluation`) without upgrading the agent SDK. The
@@ -788,8 +1246,36 @@ and web base URL in the shell first.
   --output output\agent-quality\candidate.json
 ```
 
+Coherence currently supports
+[English-language responses only](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/general-purpose-evaluators).
+The benchmark and replay therefore score it in a separate `english_coherence`
+stage, selecting only reviewed actual-response language tags of `en` or `en-*`.
+Language is not guessed from the question, employee region, or reference answer.
+`coherence_applicability` lists eligible and skipped cases. Unsupported or
+unknown-language results do not enter Coherence aggregates; no eligible answers
+means zero scored cases and null aggregate scores, not a pass.
+The hosted PDF-reference profile does not use Coherence.
+
+To include English Coherence, add `--capture-only` to the benchmark command.
+Keep an unchanged copy of the captured report. Review each actual answer and
+add `response_language` to its entry in `results` (`en`, `fi`, `zh-HK`, or the
+appropriate language tag); do not change answers or captured context.
+Capture-only leaves `status: incomplete`, `response_collection: completed`,
+and `scoring_complete: false`. Then score the reviewed file:
+
+```powershell
+uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py `
+  --benchmark-report output\agent-quality\candidate.json `
+  --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+  --model-deployment $env:ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME
+```
+
+Use the same cases, project, judge, threshold and dataset settings as the capture.
+Successful scoring marks the report completed without collecting new answers.
+Unreviewed language tags can be left absent; Coherence is then explicitly skipped.
+
 The benchmark verifies the actual knowledge-base/source/index binding, runs all
-17 hard-requirement cases sequentially, and captures classifier decisions,
+18 hard-requirement cases sequentially, and captures classifier decisions,
 retrieval scopes, generated answers, structured citations, and the exact compact
 policy context supplied to generation. It reuses the same case checks and
 Foundry scoring code as the hosted-endpoint evaluator, rather than relying on

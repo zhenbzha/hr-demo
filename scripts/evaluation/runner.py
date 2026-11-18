@@ -22,6 +22,7 @@ from .foundry import (
     EvaluationSettings,
     behavior_criterion,
     built_in_criteria,
+    coherence_criterion,
     create_rubric_evaluator,
     dataset_schema,
     evaluation_summary,
@@ -34,7 +35,7 @@ from .foundry import (
     task_adherence_criterion,
     wait_for_run,
 )
-from .references import policy_evaluation_query
+from .references import REFERENCE_INPUT_CONTRACT, policy_evaluation_query
 
 
 def write_summary(path: Path, summary: dict[str, Any]) -> None:
@@ -78,6 +79,8 @@ def captured_dataset_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
         row = {field: result[field] for field in fields if field != "output_items"}
         row["output_items"] = captured_response_items(result)
         row["agent_query"] = build_captured_agent_query(result, instructions)
+        if "response_language" in result:
+            row["response_language"] = result["response_language"]
         rows.append(row)
     summary["evaluator_input_format"] = "foundry_text_content_parts"
     summary["evaluator_query_source"] = (
@@ -111,9 +114,50 @@ def check_evaluation_sdk(project_endpoint: str) -> None:
         if not hasattr(project, "evaluators"):
             raise RuntimeError(
                 "This environment's azure-ai-projects lacks the evaluator catalog. "
-                "Use the project's evaluation environment (azure-ai-projects>=2.8.0), "
+                "Use the project's evaluation environment (azure-ai-projects>=2.11.0), "
                 "or pass --evaluation-python to the pipeline benchmark."
             )
+
+
+def reviewed_english_rows(
+    rows: list[dict[str, Any]], summary: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """
+    Select responses explicitly reviewed as English for Coherence.
+
+    Parameters
+    ----------
+    rows : list of dict
+        Captured answers with optional ``response_language`` language tags.
+        The tag describes the actual answer, not the question or expected
+        language. Missing tags are unknown; language is never guessed.
+    summary : dict
+        Report receiving eligible IDs and explicit not-applicable reasons.
+
+    Returns
+    -------
+    list of dict
+        Unchanged rows whose reviewed language tag is ``en`` or ``en-*``.
+    """
+    selected, skipped = [], []
+    for row in rows:
+        language = row.get("response_language")
+        if language is not None and not isinstance(language, str):
+            raise ValueError("response_language must be a reviewed language tag")
+        if language and language.lower().split("-")[0] == "en":
+            selected.append(row)
+        else:
+            skipped.append({
+                "case_id": row["case_id"],
+                "response_language": language,
+                "reason": "Non-English response" if language else "Response language not reviewed",
+            })
+    summary["coherence_applicability"] = {
+        "basis": "Reviewed actual response_language; English only, unknown languages skipped.",
+        "eligible_case_ids": [row["case_id"] for row in selected],
+        "not_applicable": skipped,
+    }
+    return selected
 
 
 def run_stage(
@@ -252,6 +296,8 @@ def score_reference_rows(
         name: version(name) for name in ("azure-ai-projects", "openai")
     }
     criteria = built_in_criteria(settings.model_deployment, references=True)
+    english_rows = reviewed_english_rows(rows, summary)
+    coherence = [coherence_criterion(settings.model_deployment)] if english_rows else []
     task_criteria = [task_adherence_criterion(settings.model_deployment)]
     with (
         AIProjectClient(
@@ -266,7 +312,7 @@ def score_reference_rows(
         ) as client,
     ):
         required = {
-            criterion["evaluator_name"] for criterion in criteria + task_criteria
+            criterion["evaluator_name"] for criterion in criteria + task_criteria + coherence
         }
         catalog = {
             evaluator.name: evaluator
@@ -281,7 +327,7 @@ def score_reference_rows(
             name: {"name": evaluator.name, "version": evaluator.version}
             for name, evaluator in catalog.items()
         }
-        for criterion in criteria + task_criteria:
+        for criterion in criteria + task_criteria + coherence:
             criterion["evaluator_version"] = catalog[
                 criterion["evaluator_name"]
             ].version
@@ -302,6 +348,7 @@ def score_reference_rows(
             "built_in": criteria,
             "expected_behavior": behavior,
             "task_adherence": task_criteria,
+            "english_coherence": coherence,
         }
         write_summary(summary_path, summary)
         schema = dataset_schema(references=True)
@@ -309,6 +356,8 @@ def score_reference_rows(
             ("built_in", criteria, rows),
             ("expected_behavior", behavior, rows),
         ]
+        if english_rows:
+            stages.append(("english_coherence", coherence, english_rows))
         generation_rows = [row for row in rows if row["case_id"] in generation_case_ids]
         if generation_rows:
             stages.append(("task_adherence", task_criteria, generation_rows))
@@ -376,11 +425,12 @@ def score_dataset(
         OpenAI-client request timeout in seconds, capped at 60.
     policy_case_ids : set of str or None, default=None
         Enable the PDF-reference profile for this predeclared subset of cases.
-        All cases receive HR behavior and source-faithfulness scoring; only
+        All cases receive HR behavior and reference-based correctness scoring; only
         this subset receives Response Completeness. None selects the benchmark
         diagnostic profile, which requires recorded ``agent_query``
-        conversations in every row. The PDF-reference profile also uses these
-        conversations when supplied; if any row supplies one, all must do so.
+        conversations in every row. The PDF-reference profile retains these
+        conversations for audit when supplied; if any row supplies one, all must
+        do so. Its rubric uses the separate question/source/reference query.
     """
     definition = rubric_definition(settings.pass_threshold)
     fingerprint = rubric_fingerprint(settings.pass_threshold)
@@ -395,6 +445,14 @@ def score_dataset(
     summary["rubric_minimum_dimension_score"] = MIN_RUBRIC_DIMENSION_SCORE
     summary["rubric_definition"] = definition
     summary["hr_score_format"] = "native_weighted_rubric_0_to_1"
+    summary.setdefault("evaluation_scope", {
+        "response_source": "saved_answers_unspecified",
+        "dataset_role": "unspecified",
+        "interpretation": (
+            "Scores describe this sample set only. Capture route and independent "
+            "validation must not be inferred from a passing score."
+        ),
+    })
     dataset_bytes = dataset_path.read_bytes()
     inline_rows = [
         json.loads(line) for line in dataset_bytes.decode("utf-8").splitlines()
@@ -416,10 +474,12 @@ def score_dataset(
             else "inline_verified_captured_agent_query"
         ),
         "rubric_query_field": (
-            "agent_query" if agent_inputs
-            else "policy_query" if policy_case_ids is not None
+            "policy_query" if policy_case_ids is not None
+            else "agent_query" if agent_inputs
             else "query"
         ),
+        "rubric_response_field": "response",
+        "tool_trace_usage": "retained_for_audit_not_graded_as_answer_text",
         "sha256": hashlib.sha256(dataset_bytes).hexdigest(),
         "registered_dataset_usage": "capture_lineage_only",
     }
@@ -432,31 +492,39 @@ def score_dataset(
         ):
             raise ValueError("Policy scoring must retain every declared case exactly once")
         for row in inline_rows:
-            if row.get("policy_query") != policy_evaluation_query(row):
-                raise ValueError("Policy query must preserve the captured question and context")
             truth = row.get("ground_truth")
             if not isinstance(truth, str) or bool(truth.strip()) != (
                 row["case_id"] in policy_case_ids
             ):
                 raise ValueError("Reference answers do not match the declared policy cases")
-        summary["evaluation_profile"] = "pdf_reference_native_demo_v4"
+            if row.get("policy_query") != policy_evaluation_query(row):
+                raise ValueError(
+                    "Policy query must preserve the captured question and context "
+                    "and the separately declared reference answer key"
+                )
+        summary["scoring_inputs"].update({
+            "contract": REFERENCE_INPUT_CONTRACT,
+            "reference_usage": "pdf_derived_expected_facts_not_additional_policy",
+        })
+        summary["evaluation_profile"] = "pdf_source_native_demo_v6"
         summary["evaluation_plan"] = {
             "behavior_case_ids": sorted(case_ids),
             "policy_answer_case_ids": sorted(policy_case_ids),
             "clarification_or_no_policy_case_ids": sorted(case_ids - policy_case_ids),
             "gating_policy_metrics": ["response_completeness"],
-            "source_faithfulness": {
+            "reference_based_correctness": {
                 "evaluator": "hr_rubric",
                 "dimension": "policy_scope_and_evidence",
-                "minimum_score": MIN_RUBRIC_DIMENSION_SCORE,
+                "required_minimum_score": MIN_RUBRIC_DIMENSION_SCORE,
             },
             "retired_evaluators": [{
                 "name": "builtin.groundedness",
-                "replacement": "hr_rubric.policy_scope_and_evidence",
+                "replacement": "reference_based_hr_rubric.policy_scope_and_evidence",
                 "reason": (
-                    "Generic judge conflicts with the demo contract on routine "
-                    "boilerplate and translated boundaries. The replacement is "
-                    "calibrated on source-backed positive and negative controls."
+                    "V6 compares answers with PDF evidence and PDF-derived "
+                    "expected facts, rather than only measuring groundedness. Historical "
+                    "source-only results remain unchanged; passing this different "
+                    "check does not validate the retired grader."
                 ),
             }],
             "scope_basis": (
@@ -465,8 +533,10 @@ def score_dataset(
             "scored_contract": (
                 "Fixed native rubric with a dimension-score floor, deterministic "
                 "citation checks, and PDF-reference completeness. The rubric's "
-                "policy_scope_and_evidence dimension gates factual support. Generic "
-                "Groundedness is retired from this profile, not silently passed. No per-case "
+                "policy_scope_and_evidence dimension gates reference-based correctness. "
+                "The PDFs are the policy authority; no evaluation-only policy "
+                "interpretations are accepted. Generic Groundedness is outside "
+                "this profile, not silently passed. No per-case "
                 "free-text assertion evaluator or internal execution verification."
             ),
         }
@@ -511,6 +581,7 @@ def score_dataset(
             agent_inputs=agent_inputs, policy_answers=policy_case_ids is not None
         )
         if policy_case_ids is None:
+            english_rows = reviewed_english_rows(inline_rows, summary)
             run_stage(
                 client=client,
                 name=evaluation_name + " - built-in",
@@ -525,6 +596,19 @@ def score_dataset(
                 inline_rows=inline_rows,
                 schema=schema,
             )
+            if english_rows:
+                run_stage(
+                    client=client,
+                    name=evaluation_name + " - English coherence",
+                    criteria=[coherence_criterion(settings.model_deployment)],
+                    settings=settings,
+                    summary=summary,
+                    summary_path=summary_path,
+                    case_ids={row["case_id"] for row in english_rows},
+                    label="english_coherence",
+                    inline_rows=english_rows,
+                    schema=schema,
+                )
         evaluator = create_rubric_evaluator(project, settings)
         summary["behavior_evaluator"] = {
             "name": evaluator.name,
@@ -612,7 +696,7 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
     dict
         Per-case pass/fail and failed requirements. Clarification/no-policy
         cases must pass their HR and citation checks; they never pass by omission.
-        Source faithfulness is gated by the calibrated native rubric and its
+        Reference-based correctness is gated by the native rubric and its
         minimum score per dimension. Generic Groundedness is not part of this
         profile; legacy/extra metrics are rejected rather than ignored.
 
@@ -661,12 +745,13 @@ def policy_assessment(summary: dict[str, Any]) -> dict[str, Any]:
         for identifier, failed in failures.items()
     ]
     return {
-        "profile": "pdf_reference_native_demo_v4",
+        "profile": "pdf_source_native_demo_v6",
         "definition": (
             "Limited native demo acceptance: fixed rubric plus per-dimension floor "
             "and citation checks; policy answers also require Response Completeness. "
-            "The calibrated policy_scope_and_evidence dimension gates source "
-            "faithfulness; generic Groundedness is retired from this profile. "
+            "The policy_scope_and_evidence dimension gates correctness against "
+            "source context and an explicit reference answer key, not source-only "
+            "groundedness. Generic Groundedness is outside this profile. "
             "Not exhaustive HR verification or evaluation of "
             "per-case free-text assertions."
         ),

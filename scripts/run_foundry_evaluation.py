@@ -64,6 +64,7 @@ def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
     )
     for option, variable, fallback in (
         ("project-endpoint", "FOUNDRY_PROJECT_ENDPOINT", None),
+        ("subscription", "AZURE_SUBSCRIPTION_ID", None),
         ("agent-endpoint", "AGENT_ASK_HR_RESPONSES_ENDPOINT", None),
         ("agent-name", "ASK_HR_AGENT_NAME", "ask-hr"),
         ("agent-version", "ASK_HR_AGENT_VERSION", None),
@@ -327,7 +328,7 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
     summary["scoring_complete"] = False
     try:
         with (
-            AzureCliCredential() as credential,
+            AzureCliCredential(subscription=args.subscription, process_timeout=120) as credential,
             tempfile.TemporaryDirectory(prefix="ask-hr-scoring-") as temporary,
         ):
             dataset_path = Path(temporary) / "responses.jsonl"
@@ -350,6 +351,7 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
                 request_timeout=args.request_timeout,
             )
             summary["scoring_complete"] = True
+            summary["status"] = "completed"
             if args.require_behavior_pass:
                 require_demo_pass(summary)
     finally:
@@ -396,6 +398,11 @@ def score_replay_cases(args: argparse.Namespace) -> None:
     summary = {
         "status": "incomplete",
         "purpose": "evaluator_sanity_check",
+        "evaluation_scope": {
+            "response_source": "historical_captured_answers",
+            "dataset_role": "calibration_set",
+            "interpretation": "Regrading saved examples, not a new agent or deployed-endpoint run.",
+        },
         "dataset_version": version,
         "dataset_source": "inline_captured_answers",
         "evaluator_input_format": "foundry_text_content_parts",
@@ -419,7 +426,7 @@ def score_replay_cases(args: argparse.Namespace) -> None:
         return
     print(f"Replaying saved answers: {summary_path}", flush=True)
     try:
-        with AzureCliCredential() as credential:
+        with AzureCliCredential(subscription=args.subscription, process_timeout=120) as credential:
             score_reference_rows(
                 project_endpoint=args.project_endpoint,
                 evaluation_name=args.evaluation_name,
@@ -471,6 +478,18 @@ def main() -> None:
         "rubric_threshold": args.rubric_threshold,
         "rubric_minimum_dimension_score": MIN_RUBRIC_DIMENSION_SCORE,
         "reference_answers": references.provenance,
+        "evaluation_scope": {
+            "response_source": "hosted_agent_endpoint",
+            "dataset_role": (
+                "calibration_set"
+                if args.cases.resolve() == PROJECT_ROOT / "tests" / "agent-quality-cases.json"
+                else "custom_case_set"
+            ),
+            "interpretation": (
+                "Sample-set results from the authenticated agent endpoint; "
+                "not independent generalization or web-app validation."
+            ),
+        },
         "agent": {
             "name": args.agent_name,
             "version": args.agent_version,
@@ -482,7 +501,7 @@ def main() -> None:
     }
     try:
         with (
-            AzureCliCredential() as credential,
+            AzureCliCredential(subscription=args.subscription, process_timeout=120) as credential,
             tempfile.TemporaryDirectory(prefix="ask-hr-evaluation-") as temporary,
         ):
             rows = collect_responses(args, cases, credential, summary)
@@ -520,12 +539,13 @@ def main() -> None:
     print(f"Evaluation report: {summary_path}")
     assessment = summary["assessment"]
     print(
-        f"Native demo checks: {assessment['passed']} passed, "
-        f"{assessment['failed']} failed (PDF-reference v4)."
+        f"Native demo sample-set checks: {assessment['passed']} passed, "
+        f"{assessment['failed']} failed (PDF-fact v6)."
     )
+    print(f"Test scope: {summary['evaluation_scope']}")
     print(
-        "Source faithfulness: calibrated HR rubric with a per-dimension floor. "
-        "Generic Groundedness is retired from this suite; no cases are excluded."
+        "Reference-based correctness: HR rubric with a per-dimension floor. "
+        "Source-only Groundedness is not part of this suite; no cases are excluded."
     )
 
 

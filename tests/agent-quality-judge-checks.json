@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "dataset_role": "reference_calibration",
+  "input_contract": "pdf_source_answer_text_v1",
+  "rubric_sha256": "915d9dd4a4cf895422efc6d5cb8d0a7d867c188187f98de669d41ca99da5a575",
+  "minimum_dimension_score": 3,
+  "review": {
+    "status": "assistant_source_checked",
+    "basis": "Assistant-authored, source-checked calibration examples. On 2026-11-17 the two exact-two-day planned-leave checks were removed at the user's request. The remaining questions, expected answers, labels, source quotations, PDF hashes and control responses are unchanged. Private pass/fail labels and reasons are not model inputs. Historical reports retain their original manifests and scores; their agreement counts are not recomputed for this smaller set or presented as validation.",
+    "scope": "Fourteen previously scored, assistant-authored regression examples, including missing-information checks. These are not new questions or an independent holdout. Rules, references and expected decisions must be frozen before any new scoring. The PDFs, response texts, thresholds and weights are unchanged."
+  },
+  "sources": [
+    {
+      "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+      "path": "..\\data\\global\\Global_HR_Policy_Handbook.pdf",
+      "sha256": "d43730a7adbe22365654ca7561becf8b43dd1d2bb3833f42f8b86188b39e8d80"
+    },
+    {
+      "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+      "path": "..\\data\\hongkong\\HongKong_HR_Working_Hours_Leave_and_Holidays_zh-HK.pdf",
+      "sha256": "2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83"
+    },
+    {
+      "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+      "path": "..\\data\\hongkong\\HongKong_HR_Payroll_MPF_and_Benefits_zh-HK.pdf",
+      "sha256": "2deeadaeeaaf0a1680d3bd015ecfa636b7a4e9eba03308227c13e6aa247ec819"
+    }
+  ],
+  "references": [
+    {
+      "case_id": "CHECK-OFFICIAL-REFERENCE",
+      "group": "regression",
+      "query": "For a Contoso employee in India, can a line manager provide an official employment reference under the Global handbook?",
+      "response_language": "en",
+      "ground_truth": "The Global handbook says only HR provides official employment references. A line manager should direct the request to HR rather than issue the official reference.",
+      "passages": [
+        {
+          "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+          "page": 1,
+          "quote": "This fictional policy is created solely for testing an HR knowledge assistant. It is not legal advice and must not\nbe used as an actual employment policy."
+        },
+        {
+          "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+          "page": 3,
+          "quote": "Only HR provides official employment references."
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-OFFICIAL-REFERENCE-A",
+          "response": "No. Under the Global handbook, only HR provides official employment references. Your line manager should direct the request to HR.",
+          "expected_pass": true,
+          "reason": "Preserves the Global scope and HR-only authorization, without requiring an unrequested demo disclaimer."
+        },
+        {
+          "id": "CHECK-OFFICIAL-REFERENCE-B",
+          "response": "Yes. Under the Global handbook, your line manager can issue an official employment reference directly without involving HR.",
+          "expected_pass": false,
+          "reason": "Directly contradicts the source's HR-only authorization."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-VOLUNTEER-LEAVE",
+      "group": "regression",
+      "query": "按公司香港政策，每年有多少有薪義工假？",
+      "response_language": "zh-HK",
+      "ground_truth": "按公司香港政策，義工假為每年兩個有薪工作日。",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 1,
+          "quote": "本文件只供測試「Ask HR」知識助理使用,內容屬虛構示範,並非法律意見或正式僱傭政策。香港法例、適用\n的僱傭合約及正式公司規則如有不同,均以該等文件為準。"
+        },
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "<td>義工假</td>\n<td>每年兩個有薪工作日</td>"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-VOLUNTEER-LEAVE-A",
+          "response": "按公司的香港政策，每年提供兩個有薪工作日的義工假。",
+          "expected_pass": true,
+          "reason": "Preserves company scope, two paid working days, and the annual period in Traditional Chinese."
+        },
+        {
+          "id": "CHECK-VOLUNTEER-LEAVE-B",
+          "response": "按公司的香港政策，每月提供兩個有薪工作日的義工假。",
+          "expected_pass": false,
+          "reason": "Changes the entitlement period from annual to monthly."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-CROSS-BORDER-WORK",
+      "group": "regression",
+      "query": "Under our Hong Kong policy, does the two-day remote-work allowance let me work outside Hong Kong without advance review?",
+      "response_language": "en",
+      "ground_truth": "No. Eligible roles may work remotely up to two days per week subject to team and customer needs. Working outside Hong Kong separately requires prior tax, immigration, security and data-privacy assessment.",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 1,
+          "quote": "本文件只供測試「Ask HR」知識助理使用,內容屬虛構示範,並非法律意見或正式僱傭政策。香港法例、適用\n的僱傭合約及正式公司規則如有不同,均以該等文件為準。"
+        },
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "合資格職位每週可遙距工作最多兩天,須配合團隊及客戶需要。"
+        },
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "在香港以外遙距工作須預先通過稅務、移民、保安及資料私隱評估。"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-CROSS-BORDER-WORK-A",
+          "response": "No. Our Hong Kong policy permits eligible roles to work remotely up to two days per week, subject to team and customer needs. Working outside Hong Kong still requires prior tax, immigration, security and data-privacy assessments.",
+          "expected_pass": true,
+          "reason": "Separates the conditional weekly allowance from the additional cross-border approval requirement."
+        },
+        {
+          "id": "CHECK-CROSS-BORDER-WORK-B",
+          "response": "Yes. Our Hong Kong policy permits eligible roles to work remotely up to two days per week, subject to team and customer needs. Within that allowance you can work anywhere outside Hong Kong without advance assessment.",
+          "expected_pass": false,
+          "reason": "Invents an exemption from the explicit prior cross-border assessments."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-MATERNITY",
+      "group": "regression",
+      "query": "What is the maternity leave policy in Hong Kong?",
+      "response_language": "en",
+      "ground_truth": "The company's Hong Kong policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration.",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 1,
+          "quote": "本文件只供測試「Ask HR」知識助理使用,內容屬虛構示範,並非法律意見或正式僱傭政策。香港法例、適用\n的僱傭合約及正式公司規則如有不同,均以該等文件為準。"
+        },
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 2,
+          "quote": "<td>產假</td>\n<td>不少於法定期限;公司示範安排為16星期全薪</td>"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-MATERNITY-A",
+          "response": "Our Hong Kong policy provides 16 weeks of maternity leave at full pay, no less than the applicable statutory duration.",
+          "expected_pass": true,
+          "reason": "Preserves the stated benefit and statutory floor; the task does not require routine demo boilerplate."
+        },
+        {
+          "id": "CHECK-MATERNITY-B",
+          "response": "Our Hong Kong policy provides 26 weeks of maternity leave at full pay, no less than the applicable statutory duration.",
+          "expected_pass": false,
+          "reason": "Changes the stated benefit from 16 to 26 weeks."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-MPF-MISSING-RATES",
+      "group": "regression",
+      "query": "Do our Hong Kong policy materials specify the exact current employee and employer MPF contribution percentages?",
+      "response_language": "en",
+      "ground_truth": "The policy does not state numeric contribution percentages. Contributions use the applicable income ranges and rates, and Payroll verifies current statutory rates, income limits and reporting deadlines against official information before each processing run. The current numeric percentages are not established by this document.",
+      "passages": [
+        {
+          "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+          "page": 2,
+          "quote": "本政策說明香港薪酬管理及強積金程序。所有法定比率、入息上下限及申報期限均由薪酬團隊在每次處理前按最新\n官方資料核實。"
+        },
+        {
+          "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+          "page": 2,
+          "quote": "● 僱員及僱主供款按當時適用的入息範圍及比率計算。"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-MPF-MISSING-RATES-A",
+          "response": "No numeric percentages are stated in our Hong Kong policy. Employee and employer contributions use the applicable income ranges and rates, which Payroll verifies against current official information before each processing run. Please ask Payroll for the current figures applicable to your pay.",
+          "expected_pass": true,
+          "reason": "Clearly supplies the available policy facts and acknowledges the missing figures without inventing a rate."
+        },
+        {
+          "id": "CHECK-MPF-MISSING-RATES-B",
+          "response": "Yes. Our Hong Kong policy fixes the employee and employer contributions at 8% each for everyone, regardless of income.",
+          "expected_pass": false,
+          "reason": "Invents a numeric rate and an exemption from the applicable income ranges, neither supported by the policy or reference."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-MPF-SERVICE-BOUNDARY",
+      "group": "regression",
+      "query": "Under our Hong Kong policy, does exactly 60 days of continuous employment meet the general MPF service-length threshold?",
+      "response_language": "en",
+      "ground_truth": "Yes. The general service-length threshold is 60 days or more, so exactly 60 days meets that threshold. The policy's age range, exemptions and industry-specific rules still apply; this does not establish that every employee must enroll on that exact day.",
+      "passages": [
+        {
+          "document_id": "01951b29-ccd6-58b2-98ba-15ce60f5753d",
+          "page": 2,
+          "quote": "● 一般而言,18至64歲並連續受僱60日或以上的全職及兼職僱員須按法定時限參加強積金計劃;獲豁免人士及行\n業特別規則另行核實。"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-MPF-SERVICE-BOUNDARY-A",
+          "response": "Yes. Our Hong Kong policy's general service-length threshold is 60 days or more, so exactly 60 days meets it. The age range, exemptions and industry-specific rules still need to be considered; enrollment follows the applicable statutory timeframe.",
+          "expected_pass": true,
+          "reason": "Preserves the explicit inclusive 60-day threshold and its conditions."
+        },
+        {
+          "id": "CHECK-MPF-SERVICE-BOUNDARY-B",
+          "response": "No. Our Hong Kong policy requires strictly more than 60 days of continuous employment; exactly 60 days is excluded from the general service-length threshold.",
+          "expected_pass": false,
+          "reason": "Changes the explicit 60-days-or-more service threshold to an exclusive one."
+        }
+      ]
+    },
+    {
+      "case_id": "CHECK-CONFIDENTIAL-AI",
+      "group": "regression",
+      "query": "Under the Global handbook, may an employee in India upload confidential employee data to an unapproved AI tool if a human will review the result?",
+      "response_language": "en",
+      "ground_truth": "No. The Global handbook prohibits uploading confidential employee or customer data to unapproved AI tools. A planned human review does not create an exception to that restriction.",
+      "passages": [
+        {
+          "document_id": "2ee3c73f-6257-5a27-9dfc-f121b7238b17",
+          "page": 3,
+          "quote": "· Do not upload confidential employee or customer data into unapproved Al tools.\n\n· Al-assisted employment decisions require meaningful human review and documented fairness checks."
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHECK-CONFIDENTIAL-AI-A",
+          "response": "No. The Global handbook prohibits uploading confidential employee or customer data to unapproved AI tools. Having a human review the result does not waive that restriction.",
+          "expected_pass": true,
+          "reason": "Preserves the Global prohibition and does not invent an exception for human review."
+        },
+        {
+          "id": "CHECK-CONFIDENTIAL-AI-B",
+          "response": "Yes. The Global handbook permits uploading confidential employee data to any AI tool as long as a human reviews the result.",
+          "expected_pass": false,
+          "reason": "Invents an exception to the explicit prohibition on unapproved tools."
+        }
+      ]
+    }
+  ]
+}

@@ -350,7 +350,28 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(summary["totalSeconds"]["samples"], 5)
         self.assertAlmostEqual(summary["totalSeconds"]["p95"], 4.8)
 
-    def _run(self, root, *, scoring_error=False, rubric_scores=(5, 5, 5), require_pass=False):
+    def test_coherence_average_excludes_nonenglish_and_unknown_languages(self):
+        summary = {
+            "coherence_applicability": {"eligible_case_ids": ["english"]},
+            "built_in": {"cases": [
+                {"case_id": identifier, "results": [
+                    {"name": "coherence", "score": score, "passed": score >= 3},
+                ]}
+                for identifier, score in (("english", 4), ("finnish", 1), ("chinese", 5))
+            ]},
+        }
+        quality = benchmark.quality_summary(summary)["coherence"]
+        self.assertEqual(quality["cases"], 1)
+        self.assertEqual(quality["meanScore"], 4)
+        del summary["coherence_applicability"]
+        quality = benchmark.quality_summary(summary)["coherence"]
+        self.assertEqual(quality["cases"], 0)
+        self.assertIsNone(quality["meanScore"])
+
+    def _run(
+        self, root, *, scoring_error=False, rubric_scores=(5, 5, 5),
+        require_pass=False, capture_only=False,
+    ):
         cases_path = root / "cases.json"
         cases_path.write_text(json.dumps({"cases": [case_fixture()]}))
         args = argparse.Namespace(
@@ -366,6 +387,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
             request_timeout=30,
             require_behavior_pass=require_pass,
             evaluation_python=None,
+            capture_only=capture_only,
         )
         captured = {}
 
@@ -451,6 +473,9 @@ class BenchmarkRunnerTests(unittest.TestCase):
                     asyncio.run(benchmark.main_async(args))
             else:
                 asyncio.run(benchmark.main_async(args))
+            if capture_only:
+                scorer.assert_not_called()
+                return json.loads(args.output.read_text())
             scorer.assert_called_once()
         self.assertFalse(captured["path"].exists())
         self.assertEqual(captured["row"]["response"], "14 paid working days")
@@ -475,6 +500,15 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(
             summary["agent"]["classification_instructions"], "Classify the region."
         )
+        self.assertEqual(summary["evaluation_scope"]["response_source"], "local_pipeline")
+
+    def test_capture_only_leaves_answers_ready_for_language_review_without_scoring(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            summary = self._run(Path(temporary), capture_only=True)
+        self.assertEqual(summary["response_collection"], "completed")
+        self.assertFalse(summary["scoring_complete"])
+        self.assertEqual(summary["status"], "incomplete")
+        self.assertNotIn("expected_behavior", summary)
 
     def test_scoring_error_cannot_produce_a_completed_performance_only_report(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_BINDINGS = {
     "AZURE_AI_MODEL_DEPLOYMENT_NAME": "ask-hr-gpt-6-astra",
     "AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME": "ask-hr-gpt-6.1-sol",
-    "ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME": "ask-hr-gpt-6.1-sol",
+    "ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME": "ask-hr-gpt-5.4",
     "AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME": "configured-classifier",
 }
 HOOK_HARNESS = r"""

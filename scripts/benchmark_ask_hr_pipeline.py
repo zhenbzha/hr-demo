@@ -75,6 +75,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--request-timeout", type=float, default=300)
     parser.add_argument(
+        "--capture-only", action="store_true",
+        help="Save answers before scoring, allowing review of actual response_language.",
+    )
+    parser.add_argument(
         "--evaluation-python",
         type=Path,
         help="Use a separate Python environment for Foundry scoring without changing the agent runtime.",
@@ -301,11 +305,15 @@ def latency_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def quality_summary(summary: dict[str, Any]) -> dict[str, Any]:
     metrics: dict[str, list[dict[str, Any]]] = {}
-    for stage in ("built_in", "expected_behavior"):
-        for case in summary[stage]["cases"]:
+    applicability = summary.get("coherence_applicability", {})
+    english_ids = set(applicability.get("eligible_case_ids", []))
+    for stage in ("built_in", "english_coherence", "expected_behavior"):
+        for case in summary.get(stage, {}).get("cases", []):
             for result in case["results"]:
+                if result["name"] == "coherence" and case["case_id"] not in english_ids:
+                    continue
                 metrics.setdefault(result["name"], []).append(result)
-    return {
+    quality = {
         name: {
             "cases": len(results),
             "passed": sum(result["passed"] for result in results),
@@ -315,6 +323,12 @@ def quality_summary(summary: dict[str, Any]) -> dict[str, Any]:
         }
         for name, results in metrics.items()
     }
+    quality.setdefault("coherence", {
+        "cases": 0, "passed": 0, "failed": 0, "meanScore": None, "minScore": None,
+    })
+    quality["coherence"]["scope"] = "Reviewed English responses only"
+    quality["coherence"]["notApplicable"] = applicability.get("not_applicable", [])
+    return quality
 
 
 def evaluation_command(args: argparse.Namespace, project_endpoint: str) -> list[str]:
@@ -418,12 +432,13 @@ async def collect_responses(
 async def main_async(args: argparse.Namespace) -> None:
     project_endpoint = configure_pipeline(args)
     cases = load_cases(args.cases)
-    if args.evaluation_python is None:
-        check_evaluation_sdk(project_endpoint)
-    else:
-        subprocess.run(
-            [*evaluation_command(args, project_endpoint), "--check-sdk"], check=True
-        )
+    if not getattr(args, "capture_only", False):
+        if args.evaluation_python is None:
+            check_evaluation_sdk(project_endpoint)
+        else:
+            subprocess.run(
+                [*evaluation_command(args, project_endpoint), "--check-sdk"], check=True
+            )
     import ask_hr_pipeline as pipeline
     from permission_contract import validated_search_endpoint
 
@@ -450,6 +465,18 @@ async def main_async(args: argparse.Namespace) -> None:
             "Local production classification, live authorized Foundry IQ retrieval, "
             "and answer generation; excludes hosted HTTP transport and PDF rendering."
         ),
+        "evaluation_scope": {
+            "response_source": "local_pipeline",
+            "dataset_role": (
+                "calibration_set"
+                if args.cases.resolve() == PROJECT_ROOT / "tests" / "agent-quality-cases.json"
+                else "custom_case_set"
+            ),
+            "interpretation": (
+                "Sample-set results from a local script using live Azure services; "
+                "not independent generalization or deployed-endpoint validation."
+            ),
+        },
         "latency_scope": "Pipeline execution only; excludes Foundry evaluator scoring.",
         "agent": {
             "name": "ask-hr",
@@ -493,6 +520,10 @@ async def main_async(args: argparse.Namespace) -> None:
                 summary=summary,
             )
             rows = captured_dataset_rows(summary)
+            if getattr(args, "capture_only", False):
+                summary["scoring_complete"] = False
+                print(f"Captured answers for review, not yet scored: {args.output}")
+                return
             if args.evaluation_python is not None:
                 score_in_separate_runtime(args, project_endpoint, summary)
             else:

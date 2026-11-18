@@ -2,10 +2,10 @@
   "schema_version": 1,
   "purpose": "Known-answer evaluator sanity check, not an independent agent acceptance set.",
   "review": {
-    "status": "guidance_confirmed",
+    "status": "pending",
     "guidance": "Country policy first for each topic whenever an applicable country policy is available; otherwise use Global. A retrieval miss does not establish that no country policy exists.",
     "label_author": "assistant",
-    "basis": "The user confirmed country-first, then Global guidance and delegated its application to the assistant rather than adjudicating individual examples. References and expected decisions were derived by the assistant from the retained PDF text under that guidance. Individual translations and verdicts have not been independently human- or HR-expert-validated. Both Finland answers are expected to be incomplete because neither supplies the available local leave entitlements; the revised answer is not presumed correct."
+    "basis": "The user confirmed country-first, then Global guidance. On 2026-11-17 the owner confirmed that the Hong Kong notice rule excludes exactly two days. The two affected answer keys and provisional sample expectations are corrected from the recorded sample descriptions, not from new grading. The original descriptions identify a strict boundary; the revised descriptions identify an inclusive boundary. The original captured reports and retained DI analyses are missing locally, so whole-answer labels cannot be re-audited and review is pending: restore the hash-matching captures and verify every labeled metric before scoring. Do not treat provisional positive labels as verified passes. Other references, quotations, source hashes and capture metadata are unchanged. Both Finland answers remain expected to be incomplete. These are assistant-authored expectations, not independent HR adjudication or relabeled historical scores."
   },
   "behavior_evaluator": {
     "name": "ask_hr_expected_behavior",
@@ -217,17 +217,17 @@
       "query": "Compare annual leave in Finland and Hong Kong.",
       "basis": "policy",
       "source_ids": ["HR-FI-003", "HR-HK-003", "HR-POL-001"],
-      "ground_truth": "These are fictional local demo policies, not confirmation of real employment entitlements. Finland's accrual year is 1 April to 31 March. Each full qualifying month earns 2 arkipäivää if employment has lasted less than one year as at 31 March, or 2.5 arkipäivää if it has lasted at least one year. A full month follows the 14-day or 35-hour rule; certain sickness, family-leave and layoff absences count as work. Summer leave is mainly 2 May to 30 September. Employee preferences are heard before dates are confirmed, normally one month ahead or at least two weeks ahead. Leave exceeding 18 arkipäivää may be saved by agreement. Monthly salary continues during annual leave; unused leave is compensated on termination. Holiday bonus follows the collective agreement. Incapacity at the start of or during leave must be reported promptly with reliable evidence. Hong Kong provides 14 paid working days per calendar year, no less than the statutory entitlement, with joining/leaving-year proration. Up to five company annual-leave days can carry over and must be used by the end of March. Planned leave of two days or more is normally requested seven days ahead; exactly two days is included. Managers respond within two working days and give business reasons for refusal. Statutory annual-leave arrangements and unused-leave payment follow the Employment Ordinance. Do not equate Finnish arkipäivää with Hong Kong working days without an established conversion. Local policy takes precedence over the Global baseline of the local statutory minimum or 22 working days, whichever is greater.",
+      "ground_truth": "These are fictional local demo policies, not confirmation of real employment entitlements. Finland's accrual year is 1 April to 31 March. Each full qualifying month earns 2 arkipäivää if employment has lasted less than one year as at 31 March, or 2.5 arkipäivää if it has lasted at least one year. A full month follows the 14-day or 35-hour rule; certain sickness, family-leave and layoff absences count as work. Summer leave is mainly 2 May to 30 September. Employee preferences are heard before dates are confirmed, normally one month ahead or at least two weeks ahead. Leave exceeding 18 arkipäivää may be saved by agreement. Monthly salary continues during annual leave; unused leave is compensated on termination. Holiday bonus follows the collective agreement. Incapacity at the start of or during leave must be reported promptly with reliable evidence. Hong Kong provides 14 paid working days per calendar year, no less than the statutory entitlement, with joining/leaving-year proration. Up to five company annual-leave days can carry over and must be used by the end of March. Planned leave longer than two days is normally requested seven days ahead; exactly two days is excluded. Managers respond within two working days and give business reasons for refusal. Statutory annual-leave arrangements and unused-leave payment follow the Employment Ordinance. Do not equate Finnish arkipäivää with Hong Kong working days without an established conversion. Local policy takes precedence over the Global baseline of the local statutory minimum or 22 working days, whichever is greater.",
       "samples": [
         {
           "capture": "original",
-          "expected": {"groundedness": false, "behavioral_adherence": false},
-          "reason": "The answer says planned leave of more than two days, excluding exactly two days contrary to HR-HK-003 page 3. This is a critical source-fidelity discrepancy for this sanity check, not an assertion that every other metric must fail."
+          "expected": {"groundedness": true, "behavioral_adherence": true},
+          "reason": "Provisional only, pending restoration and review of the captured answer. The recorded description says more than two days, which matches the owner-confirmed rule; the previously documented boundary-only failure rationale is withdrawn. No completeness expectation or observed pass is inferred."
         },
         {
           "capture": "revised",
-          "expected": {"groundedness": true, "response_completeness": true, "behavioral_adherence": true},
-          "reason": "The recorded answer preserves the local entitlements, counting units, inclusive two-day threshold, carryover limits and local precedence."
+          "expected": {"groundedness": false, "response_completeness": true, "behavioral_adherence": false},
+          "reason": "Provisional only, pending capture review. The recorded inclusive boundary contradicts the owner-confirmed rule, so source fidelity and behavioral adherence should fail. The existing recall-only completeness expectation is retained; completeness is not proof that extra claims are correct."
         }
       ]
     },
@@ -236,17 +236,17 @@
       "query": "What is the maternity leave policy in Hong Kong?",
       "basis": "policy",
       "source_ids": ["HR-HK-003"],
-      "ground_truth": "The supplied Hong Kong document is explicitly a fictional demo, not a confirmed employment entitlement. Maternity leave is no shorter than the statutory duration; the company's demonstration arrangement is 16 weeks at full pay. Maternity leave is handled under the Employment Ordinance, and statutory entitlements and eligibility follow the Labour Department's published requirements. Planned leave lasting two days or more is normally requested seven days in advance, including a request lasting exactly two days. Managers respond within two working days and provide business reasons for refusal. Maternity leave and other protected absences must not be improperly refused because of staffing arrangements. The supplied policy information does not establish detailed eligibility criteria, required supporting documents or when maternity leave must begin; do not invent those details or replace the fictional arrangement with external statutory figures.",
+      "ground_truth": "The supplied Hong Kong document is explicitly a fictional demo, not a confirmed employment entitlement. Maternity leave is no shorter than the statutory duration; the company's demonstration arrangement is 16 weeks at full pay. Maternity leave is handled under the Employment Ordinance, and statutory entitlements and eligibility follow the Labour Department's published requirements. Planned leave longer than two days is normally requested seven days in advance; exactly two days is excluded. Managers respond within two working days and provide business reasons for refusal. Maternity leave and other protected absences must not be improperly refused because of staffing arrangements. The supplied policy information does not establish detailed eligibility criteria, required supporting documents or when maternity leave must begin; do not invent those details or replace the fictional arrangement with external statutory figures.",
       "samples": [
         {
           "capture": "original",
-          "expected": {"groundedness": false, "behavioral_adherence": false},
-          "reason": "The main 16-week demonstration arrangement is correctly labeled, but the extra application guidance incorrectly changes two days or more into more than two days."
+          "expected": {"groundedness": true, "behavioral_adherence": true},
+          "reason": "Provisional only, pending restoration and review of the captured answer. Its recorded more-than-two-days wording matches the owner-confirmed rule, so the former boundary-only failure rationale is withdrawn. This does not independently verify every other claim."
         },
         {
           "capture": "revised",
-          "expected": {"groundedness": true, "response_completeness": true, "behavioral_adherence": true},
-          "reason": "The recorded answer preserves the fictional scope, 16 weeks at full pay, inclusive planned-leave threshold, response time and uncertainty about unspecified eligibility details."
+          "expected": {"groundedness": false, "response_completeness": true, "behavioral_adherence": false},
+          "reason": "Provisional only, pending capture review. The recorded inclusive planned-leave threshold is wrong under the owner-confirmed rule. Source fidelity and behavioral adherence should fail even if the retained recall-only completeness expectation passes."
         }
       ]
     },

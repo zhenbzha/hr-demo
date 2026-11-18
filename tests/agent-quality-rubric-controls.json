@@ -1,18 +1,13 @@
 {
   "schema_version": 1,
-  "purpose": "Synthetic judge-calibration controls, not generated agent answers or holdout validation. Expected decisions are declared before scoring and are never sent to the judge. Evidence comes from the source_case_id's PDF-reference passages and any supplemental_passages below.",
-  "supplemental_evidence_review": "Assistant source-checked against the retained Document Intelligence pages for PDF SHA-256 2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83. This is calibration evidence, not independent HR-expert adjudication.",
+  "purpose": "Legacy synthetic calibration controls, not the active judge checks, generated agent answers, or holdout validation. On 2026-11-17 the three exact-two-day planned-leave controls were removed at the user's request. Remaining control responses and expected labels are unchanged; historical reports are not rewritten. Use agent-quality-references.json and agent-quality-judge-checks.json for current reference-based calibration.",
+  "supplemental_evidence_review": "PDF SHA-256 remains 2f6b4842ed1228c3161bc0579a96afe77bd78c6cd2bb243243746ad60de17e83. The page-1 document-status quotation is retained for the remaining controls; the notice passage used only by the removed boundary controls is omitted. Source-only grading does not receive the answer key. This is calibration evidence, not independent HR-expert adjudication.",
   "supplemental_passages": {
     "AGENT-REGION-LABEL": [
       {
         "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
         "page": 1,
         "quote": "本文件只供測試「Ask HR」知識助理使用,內容屬虛構示範,並非法律意見或正式僱傭政策。香港法例、適用\n的僱傭合約及正式公司規則如有不同,均以該等文件為準。"
-      },
-      {
-        "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
-        "page": 3,
-        "quote": "● 兩天以上的計劃假期一般提前七天申請。"
       }
     ]
   },
@@ -116,30 +111,6 @@
       "response": "Our Hong Kong policy provides 16 weeks of maternity leave at full pay. Every employee qualifies immediately on joining, regardless of length of service or statutory eligibility conditions.",
       "expected_pass": false,
       "reason": "Invents eligibility conditions not established by the policy evidence."
-    },
-    {
-      "id": "HK-INCLUSIVE-BOUNDARY",
-      "source_case_id": "AGENT-REGION-LABEL",
-      "query": "Under our Hong Kong policy, should planned leave lasting exactly two days normally be requested seven days in advance?",
-      "response": "Yes. Our Hong Kong policy says planned leave lasting two days or more should normally be requested seven days in advance, so exactly two days is included.",
-      "expected_pass": true,
-      "reason": "Preserves the inclusive numerical threshold in 兩天以上 and the normal, not unconditional, notice rule."
-    },
-    {
-      "id": "HK-EXCLUSIVE-BOUNDARY",
-      "source_case_id": "AGENT-REGION-LABEL",
-      "query": "Under our Hong Kong policy, should planned leave lasting exactly two days normally be requested seven days in advance?",
-      "response": "No. Our Hong Kong policy applies the seven-day advance request rule only to planned leave lasting strictly more than two days; exactly two days is excluded.",
-      "expected_pass": false,
-      "reason": "Incorrectly excludes the stated number from the source's inclusive threshold."
-    },
-    {
-      "id": "HK-INCLUSIVE-BOUNDARY-ZH",
-      "source_case_id": "AGENT-REGION-LABEL",
-      "query": "按公司香港政策，計劃請假剛好兩天，是否一般要提前七天申請？",
-      "response": "是。公司香港政策規定，兩天以上的計劃假期一般提前七天申請；兩天以上包括剛好兩天。",
-      "expected_pass": true,
-      "reason": "Preserves the inclusive threshold and normal-notice qualification in the source language."
     },
     {
       "id": "HK-EXPLICIT-DOCUMENT-STATUS",

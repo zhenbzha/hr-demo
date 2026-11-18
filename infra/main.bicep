@@ -73,8 +73,9 @@ module foundry './modules/foundry.bicep' = {
   scope: resourceGroup
   params: {
     accountName: 'aif-askhr-${resourceToken}'
+    activityDeploymentName: 'ask-hr-gpt-6.1-sol'
     classifierDeploymentName: 'ask-hr-gpt-4.1-mini'
-    evaluationDeploymentName: 'ask-hr-gpt-6.1-sol'
+    evaluationDeploymentName: 'ask-hr-gpt-5.4'
     generationDeploymentName: 'ask-hr-gpt-6-astra'
     generationModelCapacity: 100
     location: location
@@ -192,7 +193,7 @@ output AZURE_AI_PROJECT_NAME string = foundry.outputs.projectName
 output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
 output AZURE_AI_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint
 output AZURE_AI_MODEL_DEPLOYMENT_NAME string = foundry.outputs.generationDeploymentName
-output AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME string = foundry.outputs.evaluationDeploymentName
+output AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME string = foundry.outputs.activityDeploymentName
 output ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME string = foundry.outputs.evaluationDeploymentName
 output AZURE_OPENAI_ENDPOINT string = foundry.outputs.openAiEndpoint
 output AZURE_OPENAI_EMBEDDING_DEPLOYMENT string = foundry.outputs.embeddingDeploymentName

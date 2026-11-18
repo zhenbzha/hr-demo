@@ -10,6 +10,8 @@ from typing import Any
 
 from .cases import expected_behavior
 
+REFERENCE_INPUT_CONTRACT = "pdf_source_answer_text_v1"
+
 
 @dataclass(frozen=True)
 class PolicyReferences:
@@ -61,6 +63,10 @@ def load_policy_references(
     manifest = json.loads(content)
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported policy-reference schema version")
+    if "interpretations" in manifest:
+        raise ValueError(
+            "Policy references must use PDF facts, not evaluation-only interpretations"
+        )
     review = manifest.get("review", {})
     if review.get("status") not in {
         "assistant_source_checked", "human_reviewed",
@@ -131,20 +137,31 @@ def load_policy_references(
 
 def policy_evaluation_query(row: dict[str, Any]) -> str:
     """
-    Pair the original question with unmodified source context for evaluation.
+    Separate the original question, source context, and reference answer key.
 
     Parameters
     ----------
     row : dict
-        Captured ``query`` and ``context``. No reference answer is included.
+        Captured ``query`` and ``context``, plus ``ground_truth`` derived from
+        the source PDFs. Evaluation-only policy interpretations are rejected.
 
     Returns
     -------
     str
-        Evaluation-only JSON, not a reconstruction of the agent's conversation.
+        Evaluation-only JSON for reference-based correctness. Reference fields
+        are not inserted into source context or represented as agent inputs.
     """
+    if "reference_interpretations" in row:
+        raise ValueError(
+            "Policy grading must preserve the captured question and context "
+            "without evaluation-only interpretations"
+        )
     return json.dumps(
-        {"question": row["query"], "policy_context": row["context"]},
+        {
+            "question": row["query"],
+            "policy_context": row["context"],
+            "reference_answer": row["ground_truth"],
+        },
         ensure_ascii=False,
     )
 
@@ -165,8 +182,8 @@ def policy_dataset_rows(
     Returns
     -------
     list of dict
-        Copies with independent ``ground_truth`` and an evaluation-only
-        ``policy_query`` containing the question and unchanged source context.
+        Copies with PDF-derived ``ground_truth`` and a ``policy_query``
+        separating the question, unchanged source context, and expected answer.
         Non-policy cases have an empty reference and no completeness scoring.
         Original questions, conversations, and responses are preserved.
 
@@ -187,11 +204,10 @@ def policy_dataset_rows(
             or row["expected_behavior"] != expected_behavior(case)
         ):
             raise ValueError(f"{case['id']}: captured question or requirements changed")
-        prepared.append(
-            {
-                **row,
-                "ground_truth": references.answers.get(row["case_id"], ""),
-                "policy_query": policy_evaluation_query(row),
-            }
-        )
+        item = {
+            **row,
+            "ground_truth": references.answers.get(row["case_id"], ""),
+        }
+        item["policy_query"] = policy_evaluation_query(item)
+        prepared.append(item)
     return prepared

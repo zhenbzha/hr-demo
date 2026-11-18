@@ -2,8 +2,8 @@
   "schema_version": 1,
   "review": {
     "status": "assistant_source_checked",
-    "basis": "Assistant-authored references independently derived from the source PDF pages, not from generated answers or judge scores. PDF hashes and quoted passages were checked against the ingestion analysis for those PDF bytes. These are fictional demo-policy references, not independent human or HR-expert adjudication. Review them before using this suite as a customer acceptance gate.",
-    "scope": "Required facts relevant to each question, not every detail in the source document. Faithful paraphrases are acceptable unless the question explicitly requests a quotation. Routine answers need not repeat fictional/demo labels or blanket disclaimers, but must preserve company-policy scope and material conditions. The original cases and their expected behavior remain unchanged. Cases explicitly expecting zero citations retain their clarification/no-policy checks and have no policy-answer reference."
+    "basis": "Assistant-authored references derived from the source PDF pages, not from generated answers or judge scores. Existing quotations were checked against ingestion analysis. On 2026-11-17 the exact-two-day notice case was replaced with a question about a week of annual leave. Its notice quotation was verified on physical page 3 directly from the unchanged, hash-verified PDF using pypdf because the historical Document Intelligence analysis is missing locally. The expected answer preserves the general seven-day advance request without asserting whether exactly two days is included. This is not independent HR-expert adjudication. HR must review the references before acceptance use.",
+    "scope": "Required facts relevant to each question, not every detail in the source document. Faithful paraphrases are acceptable unless the question explicitly requests a quotation. Routine answers need not repeat fictional/demo labels or blanket disclaimers, but must preserve company-policy scope and material conditions. The other seventeen cases and their expected answers are unchanged. Cases explicitly expecting zero citations retain their clarification/no-policy checks and have no policy-answer reference."
   },
   "sources": [
     {
@@ -229,6 +229,18 @@
           "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
           "page": 2,
           "quote": "<td>產假</td>\n<td>不少於法定期限;公司示範安排為16星期全薪</td>"
+        }
+      ]
+    },
+    {
+      "case_id": "AGENT-HK-LEAVE-NOTICE",
+      "query": "I'm planning a week of annual leave in Hong Kong. How far in advance should I apply?",
+      "ground_truth": "You should generally submit your leave request seven days in advance.",
+      "passages": [
+        {
+          "document_id": "9f538af6-fb90-5947-874b-c232181d8696",
+          "page": 3,
+          "quote": "● 兩天以上的計劃假期一般提前七天申請。"
         }
       ]
     },

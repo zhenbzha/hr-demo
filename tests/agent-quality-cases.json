@@ -127,6 +127,12 @@
       "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"]
     },
     {
+      "id": "AGENT-HK-LEAVE-NOTICE",
+      "hardRequirement": true,
+      "query": "I'm planning a week of annual leave in Hong Kong. How far in advance should I apply?",
+      "expectedDocumentIds": ["9f538af6-fb90-5947-874b-c232181d8696"]
+    },
+    {
       "id": "AGENT-HK-ANNUAL-LEAVE",
       "workbookRefs": ["ACT-028"],
       "hardRequirement": true,

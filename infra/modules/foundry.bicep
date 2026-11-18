@@ -1,6 +1,8 @@
 targetScope = 'resourceGroup'
 
 param accountName string
+param activityDeploymentName string
+param activityModelCapacity int = 100
 param classifierDeploymentName string
 param classifierModelCapacity int = 10
 param evaluationDeploymentName string
@@ -37,10 +39,10 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.1' = {
           name: 'gpt-6.1-sol'
           version: '2026-09-29'
         }
-        name: evaluationDeploymentName
+        name: activityDeploymentName
         raiPolicyName: 'Microsoft.DefaultV2'
         sku: {
-          capacity: evaluationModelCapacity
+          capacity: activityModelCapacity
           name: 'GlobalStandard'
         }
       }
@@ -87,6 +89,15 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.1' = {
   }
 }
 
+module evaluation './evaluation-model.bicep' = {
+  name: 'evaluation-model'
+  params: {
+    accountName: account.outputs.name
+    deploymentName: evaluationDeploymentName
+    capacity: evaluationModelCapacity
+  }
+}
+
 resource accountResource 'Microsoft.CognitiveServices/accounts@2026-03-01' existing = {
   name: accountName
 }
@@ -111,9 +122,10 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = {
 output accountId string = account.outputs.resourceId
 output accountName string = account.outputs.name
 output accountPrincipalId string = account.outputs.?systemAssignedMIPrincipalId ?? ''
+output activityDeploymentName string = activityDeploymentName
 output classifierDeploymentName string = classifierDeploymentName
 output embeddingDeploymentName string = embeddingDeploymentName
-output evaluationDeploymentName string = evaluationDeploymentName
+output evaluationDeploymentName string = evaluation.outputs.deploymentName
 output generationDeploymentName string = generationDeploymentName
 output openAiEndpoint string = 'https://${account.outputs.name}.openai.azure.com'
 output projectEndpoint string = 'https://${account.outputs.name}.services.ai.azure.com/api/projects/${project.name}'

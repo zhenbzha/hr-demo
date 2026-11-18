@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+import check_evaluation_judge as judge_checks
 import run_foundry_evaluation as runner
 from azure.core.exceptions import ResourceExistsError
 from evaluation import agent, cases, foundry
@@ -435,11 +436,12 @@ class CaseValidationTests(unittest.TestCase):
         loaded = cases.load_cases(
             Path(__file__).resolve().parent / "agent-quality-cases.json"
         )
-        self.assertEqual(len(loaded), 17)
-        self.assertEqual(len({case["id"] for case in loaded}), 17)
-        load_policy_references(
+        self.assertEqual(len(loaded), 18)
+        self.assertEqual(len({case["id"] for case in loaded}), 18)
+        references = load_policy_references(
             Path(__file__).resolve().parent / "agent-quality-references.json", loaded
         )
+        self.assertEqual(len(references.answers), 14)
 
 
 class FoundryResultTests(unittest.TestCase):
@@ -553,17 +555,42 @@ class PolicyReferenceTests(unittest.TestCase):
                 self.assertEqual(
                     before, {
                         key: value for key, value in after.items()
-                        if key not in {"ground_truth", "policy_query"}
+                        if key not in {
+                            "ground_truth", "policy_query",
+                        }
                     }
                 )
                 self.assertEqual(
                     json.loads(after["policy_query"]),
-                    {"question": before["query"], "policy_context": before["context"]},
+                    {
+                        "question": before["query"],
+                        "policy_context": before["context"],
+                        "reference_answer": after["ground_truth"],
+                    },
                 )
             with self.assertRaisesRegex(ValueError, "uniquely cover"):
                 policy_dataset_rows(rows[:1], references)
             rows[0]["query"] = "Changed question"
             with self.assertRaisesRegex(ValueError, "requirements changed"):
+                policy_dataset_rows(rows, references)
+
+    def test_evaluation_only_interpretations_cannot_override_pdf_facts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = policy_reference_fixture(Path(temporary), self.cases)
+            manifest = json.loads(path.read_text())
+            note = {
+                "document_id": "policy", "page": 1, "quote": "Policy answer.",
+                "meaning": "An extra policy condition not stated in the PDF.",
+                "review": {"status": "user_confirmed", "basis": "Explicit source review."},
+            }
+            references = load_policy_references(path, self.cases)
+            manifest["interpretations"] = [note]
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "PDF facts"):
+                load_policy_references(path, self.cases)
+            rows = [cases.evaluation_row(case, agent_result()) for case in self.cases]
+            rows[0]["reference_interpretations"] = [note]
+            with self.assertRaisesRegex(ValueError, "evaluation-only interpretations"):
                 policy_dataset_rows(rows, references)
 
     def test_missing_stale_or_repurposed_references_fail_before_scoring(self):
@@ -724,6 +751,20 @@ class PolicyReferenceTests(unittest.TestCase):
                             "text": "Recorded question and supplied policy evidence.",
                         }],
                     }]
+            rows[0]["output_items"].extend([
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_call", "name": "ask_hr_citations",
+                        "tool_call_id": "citation-call", "arguments": {},
+                    }],
+                },
+                {
+                    "role": "tool", "tool_call_id": "citation-call",
+                    "content": [{"type": "tool_result", "tool_result": "Citation metadata."}],
+                },
+            ])
+            original_rows = json.dumps(rows, sort_keys=True)
             path = root / "responses.jsonl"
             runner._write_dataset_rows(path, rows)
             summary = {
@@ -778,12 +819,20 @@ class PolicyReferenceTests(unittest.TestCase):
             self.assertEqual(
                 summary["scoring_inputs"]["source"], "inline_pdf_reference_dataset"
             )
-            query_field = "agent_query" if captured else "policy_query"
+            query_field = "policy_query"
             self.assertEqual(summary["scoring_inputs"]["rubric_query_field"], query_field)
             rubric_stage = stage.call_args_list[0].kwargs
             self.assertEqual(
                 rubric_stage["criteria"][0]["data_mapping"]["query"],
                 "{{item." + query_field + "}}",
+            )
+            self.assertEqual(
+                rubric_stage["criteria"][0]["data_mapping"]["response"], "{{item.response}}"
+            )
+            self.assertEqual(json.dumps(rows, sort_keys=True), original_rows)
+            self.assertEqual(
+                summary["scoring_inputs"]["reference_usage"],
+                "pdf_derived_expected_facts_not_additional_policy",
             )
             self.assertEqual(
                 "agent_query" in rubric_stage["schema"]["item_schema"]["required"],
@@ -796,7 +845,10 @@ class PolicyReferenceTests(unittest.TestCase):
             self.assertEqual(summary["assessment"]["failed"], 2)
 
     def test_missing_or_changed_policy_context_fails_before_scoring(self):
-        for invalid in (None, '{"question":"Policy?","policy_context":"changed"}'):
+        for invalid in (
+            None, '{"question":"Policy?","policy_context":"changed"}',
+            "changed_reference", "changed_interpretation",
+        ):
             with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 references = load_policy_references(
@@ -808,6 +860,10 @@ class PolicyReferenceTests(unittest.TestCase):
                 )
                 if invalid is None:
                     rows[0].pop("policy_query")
+                elif invalid == "changed_reference":
+                    rows[0]["ground_truth"] = "Different answer key."
+                elif invalid == "changed_interpretation":
+                    rows[0]["reference_interpretations"] = [{"meaning": "Different meaning."}]
                 else:
                     rows[0]["policy_query"] = invalid
                 path = root / "responses.jsonl"
@@ -892,7 +948,7 @@ class NativeRubricTests(unittest.TestCase):
             criterion["initialization_parameters"], {"deployment_name": "judge"}
         )
         self.assertEqual(criterion["data_mapping"], {
-            "query": "{{item.query}}", "response": "{{item.output_items}}",
+            "query": "{{item.query}}", "response": "{{item.response}}",
             "tool_definitions": "{{item.tool_definitions}}",
         })
         captured_criterion = foundry.rubric_criterion(
@@ -939,6 +995,10 @@ class NativeRubricTests(unittest.TestCase):
                 self.assertTrue(stage["cases"][0]["results"][0]["passed"])
                 assessment = foundry.rubric_assessment(stage)
                 self.assertEqual(assessment["cases"][0]["passed"], passes)
+                self.assertEqual(
+                    assessment["dimension_score_summary"]["policy_scope_and_evidence"],
+                    {"observed_minimum_score": scores[1], "required_minimum_score": 3},
+                )
                 self.assertEqual(json.dumps(stage, sort_keys=True), original)
                 for hosted in (False, True):
                     summary = {
@@ -1063,6 +1123,7 @@ class ManualRunnerTests(unittest.TestCase):
             agent_version="3",
             agent_endpoint="https://example.services.ai.azure.com/api/projects/project/agents/ask-hr/endpoint/protocols/openai/responses",
             project_endpoint="https://example.services.ai.azure.com/api/projects/project",
+            subscription="test-subscription",
             user_id="test-user",
             request_timeout=30,
             max_retry_seconds=0,
@@ -1210,10 +1271,15 @@ class ManualRunnerTests(unittest.TestCase):
                 patch.object(runner, "parse_args", return_value=args),
                 patch.object(runner, "check_evaluation_sdk"),
                 patch.object(runner, "invoke_agent", return_value=agent_result()),
-                patch.object(runner, "AzureCliCredential", return_value=credential),
+                patch.object(
+                    runner, "AzureCliCredential", return_value=credential
+                ) as credential_factory,
                 patch.object(scoring, "AIProjectClient", return_value=project),
             ):
                 runner.main()
+            credential_factory.assert_called_once_with(
+                subscription="test-subscription", process_timeout=120
+            )
             summary_file = next((args.output_dir / "results").glob("*.json"))
             summary = json.loads(summary_file.read_text())
             self.assertEqual(summary["status"], "completed")
@@ -1464,6 +1530,8 @@ class CapturedBenchmarkTests(unittest.TestCase):
                 {
                     "source": "inline_verified_captured_agent_query",
                     "rubric_query_field": "agent_query",
+                    "rubric_response_field": "response",
+                    "tool_trace_usage": "retained_for_audit_not_graded_as_answer_text",
                     "sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
                     "registered_dataset_usage": "capture_lineage_only",
                 },
@@ -1547,6 +1615,133 @@ class CapturedBenchmarkTests(unittest.TestCase):
                         saved["expected_behavior"]["cases"][0]["results"][0]["passed"],
                         behavior_pass,
                     )
+
+
+class FrozenJudgeCheckTests(unittest.TestCase):
+    def test_expected_decisions_stay_private_but_answer_key_reaches_judge(self):
+        path = Path(__file__).parent / "agent-quality-judge-checks.json"
+        original_rows, original_provenance = judge_checks.load_checks(path)
+        manifest = original_provenance["reference_answers"]["manifest"]
+        check = manifest["references"][0]["checks"][0]
+        check["expected_pass"] = not check["expected_pass"]
+        check["reason"] = "Revised after reference review."
+        for source in manifest["sources"]:
+            source["path"] = str((path.parent / source["path"]).resolve())
+        with tempfile.TemporaryDirectory() as temporary:
+            revised = Path(temporary) / "checks.json"
+            revised.write_text(json.dumps(manifest), encoding="utf-8")
+            revised_rows, revised_provenance = judge_checks.load_checks(revised)
+            manifest["references"][0]["ground_truth"] = "Revised PDF-derived expected answer."
+            revised.write_text(json.dumps(manifest), encoding="utf-8")
+            new_reference_rows, _ = judge_checks.load_checks(revised)
+        self.assertEqual(original_rows, revised_rows)
+        self.assertNotEqual(
+            original_provenance["expected_decisions"][check["id"]]["expected_pass"],
+            revised_provenance["expected_decisions"][check["id"]]["expected_pass"],
+        )
+        self.assertNotEqual(original_rows[0]["policy_query"], new_reference_rows[0]["policy_query"])
+        self.assertEqual(original_rows[0]["response"], new_reference_rows[0]["response"])
+        self.assertEqual(original_rows[0]["context"], new_reference_rows[0]["context"])
+        self.assertEqual(
+            json.loads(new_reference_rows[0]["policy_query"])["reference_answer"],
+            "Revised PDF-derived expected answer.",
+        )
+
+    def test_inputs_exclude_expected_labels_and_require_the_frozen_rubric(self):
+        path = Path(__file__).parent / "agent-quality-judge-checks.json"
+        rows, provenance = judge_checks.load_checks(path)
+        self.assertEqual(len(rows), len(provenance["expected_decisions"]))
+        for row in rows:
+            self.assertNotIn("expected_pass", row)
+            self.assertNotIn("reason", row)
+            self.assertNotIn("reference_interpretations", row)
+            self.assertTrue(row["ground_truth"])
+            self.assertEqual(json.loads(row["policy_query"]), {
+                "question": row["query"], "policy_context": row["context"],
+                "reference_answer": row["ground_truth"],
+            })
+        with (
+            patch.object(judge_checks, "rubric_fingerprint", return_value="changed"),
+            self.assertRaisesRegex(ValueError, "frozen"),
+        ):
+            judge_checks.load_checks(path)
+
+    def test_incorrect_answers_failing_are_agreements_not_false_failures(self):
+        expected = {
+            "correct": {"group": "new_question", "expected_pass": True},
+            "incorrect": {"group": "new_question", "expected_pass": False},
+            "regression": {"group": "regression", "expected_pass": True},
+        }
+        cases = [
+            {"case_id": identifier, "passed": value}
+            for identifier, value in (("correct", True), ("incorrect", False), ("regression", False))
+        ]
+        result = judge_checks.compare_checks({"cases": cases}, expected)
+        self.assertEqual(result["groups"]["new_question"], {
+            "agreement": 2, "false_pass": 0, "false_fail": 0,
+        })
+        self.assertEqual(result["groups"]["regression"]["false_fail"], 1)
+        self.assertFalse(result["passed"])
+        cases[1]["passed"] = True
+        self.assertEqual(
+            judge_checks.compare_checks({"cases": cases}, expected)["groups"]["new_question"]["false_pass"],
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            judge_checks.compare_checks({"cases": [*cases, cases[0]]}, expected)
+
+
+class CoherenceApplicabilityTests(unittest.TestCase):
+    def test_only_reviewed_english_responses_reach_coherence(self):
+        rows = []
+        for identifier, language in (
+            ("english", "en-GB"), ("finnish", "fi"), ("chinese", "zh-HK"), ("unknown", None),
+        ):
+            row = cases.evaluation_row({"id": identifier, "query": "Policy?"}, agent_result())
+            row["agent_query"] = [{"role": "user", "content": [{"type": "text", "text": "Policy?"}]}]
+            if language:
+                row["response_language"] = language
+            rows.append(row)
+        original = json.dumps(rows, sort_keys=True)
+        summary = {
+            "dataset_version": "test",
+            "agent": {"name": "ask-hr", "version": "test"},
+        }
+        project = MagicMock()
+        project.__enter__.return_value = project
+        project.datasets.upload_file.return_value = SimpleNamespace(id="dataset")
+        project.evaluators.create_version.return_value = SimpleNamespace(name="rubric", version="1")
+
+        def score(**kwargs):
+            if kwargs["label"] == "expected_behavior":
+                summary["expected_behavior"] = {
+                    "cases": [rubric_case(row["case_id"]) for row in rows],
+                }
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(scoring, "AIProjectClient", return_value=project),
+            patch.object(scoring, "run_stage", side_effect=score) as stage,
+        ):
+            path = Path(temporary) / "rows.jsonl"
+            runner._write_dataset_rows(path, rows)
+            scoring.score_dataset(
+                project_endpoint="https://example.test", dataset_name="test",
+                evaluation_name="test", settings=foundry.EvaluationSettings("judge", .75, 1, 60),
+                credential=Mock(), dataset_path=path, summary=summary,
+                summary_path=Path(temporary) / "report.json",
+                case_ids={row["case_id"] for row in rows},
+            )
+        stages = {call.kwargs["label"]: call.kwargs for call in stage.call_args_list}
+        self.assertNotIn("coherence", {item["name"] for item in stages["built_in"]["criteria"]})
+        self.assertEqual(stages["built_in"]["case_ids"], {row["case_id"] for row in rows})
+        self.assertEqual(stages["english_coherence"]["inline_rows"], [rows[0]])
+        self.assertEqual(stages["english_coherence"]["case_ids"], {"english"})
+        self.assertEqual(
+            {item["case_id"] for item in summary["coherence_applicability"]["not_applicable"]},
+            {"finnish", "chinese", "unknown"},
+        )
+        self.assertEqual(json.dumps(rows, sort_keys=True), original)
 
 
 if __name__ == "__main__":

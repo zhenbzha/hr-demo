@@ -95,14 +95,41 @@ in the [evaluation guide](../SHARING.md#manual-foundry-evaluation), then run:
 uv run --locked --extra evaluation python scripts\run_foundry_evaluation.py
 ```
 
-All cases receive the application-defined HR rubric, a dimension-score floor,
-and deterministic citation checks. Policy-answer cases also receive Response
-Completeness checks against PDF-derived references. The calibrated rubric's
-policy scope/evidence dimension replaces generic Groundedness as the
-source-faithfulness check. All test cases remain; the mismatched generic
-judge is retired from this profile, with historical results preserved.
+All 18 cases receive the application-defined HR rubric, a dimension-score floor,
+and deterministic citation checks. The 14 policy-answer cases also receive Response
+Completeness checks against PDF-derived references. The v6 rubric grades
+employee-facing answer text against the PDF facts and expected answers derived
+from them. Evaluation-only policy overrides are rejected. It does not grade
+internal citation messages as prose or claim
+source-only Groundedness. Historical reports remain unchanged.
 These are limited
 demo checks, not verification of every scenario-specific requirement.
+The judge is now GPT-5.4, separate from the main and Activity agent models.
+The notice case now asks about a week of annual leave, with the expected answer
+to generally submit the request seven days in advance. It replaces the
+exact-two-day question; the other 17 main cases and their references are unchanged.
+Two related judge-check examples and three legacy controls are removed, leaving
+14 active judge checks and 16 legacy controls. No interpretation side channel
+is added, and the disputed exact-two-day meaning is not asserted by this replacement.
+The PDFs and deployed agent are unchanged. The rubric uses the question's
+language and accepts honest acknowledgment of details absent from the policy.
+Earlier graders sometimes wrongly expected Chinese for an English question
+and English answer. This is a grading error, not an answer-language error.
+A fresh collection attempt also failed with HTTP 500 and a timeout.
+See the [saved results and limitations](../SHARING.md#evaluation-limitations).
+Old scores are not relabeled as v6 results, and regrading saved answers is not
+a new agent-performance baseline. The repeated seven-answer/control rechecks are
+calibration only. The rubric and completeness share an assistant-authored answer
+key, which HR must review before acceptance use.
+The earlier fresh 18-case GPT-5.5 run completed with two reported failures.
+Its boundary-based review conclusions depend on the earlier disputed key;
+the raw results are preserved, not reclassified. That run does not cover the
+replacement question.
+The revised suite was then retested live with GPT-5.5: **17/18 passed**, including
+the new week-of-leave question. Citation checks passed 18/18 and completeness
+passed 14/14. Only the EEM clarification failed the rubric; its score remains
+0.720588 against the unchanged 0.75 threshold.
+GPT-5.5 is a separately deployed comparison judge; GPT-5.4 remains the default.
 
 Review the saved report; add `--require-behavior-pass` when failed demo checks
 must produce a nonzero exit code.
