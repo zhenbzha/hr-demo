@@ -30,13 +30,11 @@ from evaluation.foundry import (
     rubric_fingerprint,
 )
 from evaluation.references import load_policy_references, policy_dataset_rows
-from evaluation.replay import compare_reference_judgments, load_reference_replay
 from evaluation.runner import (
     captured_dataset_rows,
     check_evaluation_sdk,
     require_demo_pass,
     score_dataset,
-    score_reference_rows,
     write_summary,
 )
 
@@ -83,14 +81,11 @@ def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
 def _validate_arguments(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
+    collecting = not args.check_sdk and args.benchmark_report is None
     required = ["project_endpoint"]
     if not args.check_sdk:
         required += ["model_deployment", "dataset_name", "evaluation_name"]
-    if (
-        not args.check_sdk
-        and args.benchmark_report is None
-        and args.replay_cases is None
-    ):
+    if collecting:
         required += [
             "agent_endpoint",
             "agent_name",
@@ -107,44 +102,13 @@ def _validate_arguments(
         parser.error("max_retry_seconds must be finite and nonnegative")
     if not math.isfinite(args.rubric_threshold) or not 0 <= args.rubric_threshold <= 1:
         parser.error("rubric_threshold must be finite and between 0 and 1")
-    if args.replay_cases is not None:
-        if args.behavior_threshold is None:
-            args.behavior_threshold = 4
-        if (
-            not math.isfinite(args.behavior_threshold)
-            or not 1 <= args.behavior_threshold <= 5
-        ):
-            parser.error("Historical behavior_threshold must be between 1 and 5")
-    elif args.behavior_threshold is not None:
-        parser.error(
-            "--behavior-threshold is only for historical --replay-cases; "
-            "use --rubric-threshold"
-        )
     if not args.cases.is_file():
         parser.error(f"Cases file does not exist: {args.cases}")
-    if (
-        not args.check_sdk
-        and args.benchmark_report is None
-        and args.replay_cases is None
-        and not args.references.is_file()
-    ):
+    if collecting and not args.references.is_file():
         parser.error(f"Policy reference file does not exist: {args.references}")
     if args.benchmark_report is not None and not args.benchmark_report.is_file():
         parser.error(f"Benchmark report does not exist: {args.benchmark_report}")
-    if args.replay_cases is not None:
-        if not args.replay_cases.is_file():
-            parser.error(f"Replay cases file does not exist: {args.replay_cases}")
-        if args.require_behavior_pass:
-            parser.error(
-                "Replay compares judge decisions to labels; incorrect example answers must not pass"
-            )
-    elif args.prepare_replay:
-        parser.error("--prepare-replay requires --replay-cases")
-    if (
-        not args.check_sdk
-        and args.benchmark_report is None
-        and args.replay_cases is None
-    ):
+    if collecting:
         try:
             UUID(args.user_id)
             endpoint_version_status(
@@ -158,11 +122,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     _add_identity_arguments(parser)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--replay-cases",
-        type=Path,
-        help="Re-score source-reviewed saved answers in a new report; never invokes an agent.",
-    )
     mode.add_argument(
         "--benchmark-report",
         type=Path,
@@ -185,11 +144,6 @@ def parse_args() -> argparse.Namespace:
         default=PROJECT_ROOT / "tests" / "agent-quality-references.json",
         help="PDF-backed expected answers for hosted policy-answer evaluation.",
     )
-    parser.add_argument(
-        "--prepare-replay",
-        action="store_true",
-        help="Validate and save replay inputs and reference provenance without Azure calls.",
-    )
     parser.add_argument("--poll-interval", type=float, default=10)
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--request-timeout", type=float, default=300)
@@ -197,10 +151,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rubric-threshold", type=float, default=DEFAULT_RUBRIC_THRESHOLD,
         help="Native HR rubric passing score, 0-1. Default: 0.75.",
-    )
-    parser.add_argument(
-        "--behavior-threshold", type=float,
-        help="Historical --replay-cases only: recorded prompt threshold, 1-5 (default 4).",
     )
     parser.add_argument(
         "--require-behavior-pass",
@@ -359,100 +309,6 @@ def score_benchmark_report(args: argparse.Namespace) -> None:
     print(f"Scored captured benchmark: {args.benchmark_report}")
 
 
-def score_replay_cases(args: argparse.Namespace) -> None:
-    """
-    Prepare or score reviewed saved answers to check the evaluators.
-
-    Save new evaluation inputs locally and submit them to Foundry for scoring.
-    Original answers and capture files remain unchanged. The comparison
-    measures whether evaluators agree with the reviewed labels on these
-    saved answers.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Command-line settings. ``replay_cases`` selects saved answers and
-        their reference files; ``cases`` selects the original questions.
-        Project, judge model, and threshold must match the saved evaluation.
-        ``output_dir`` receives new datasets and reports. ``prepare_replay``
-        saves validated inputs locally for review; otherwise scoring
-        requires completed review and submits the inputs to Foundry.
-    """
-    cases = load_cases(args.cases, historical=True)
-    replay = load_reference_replay(
-        args.replay_cases,
-        cases=cases,
-        cases_sha256=hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-        project_endpoint=args.project_endpoint,
-        model_deployment=args.model_deployment,
-        behavior_threshold=args.behavior_threshold,
-        require_review=not args.prepare_replay,
-    )
-    version = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    summary_path = args.output_dir / "results" / f"evaluator-replay-{version}.json"
-    dataset_path = args.output_dir / "datasets" / f"evaluator-replay-{version}.jsonl"
-    dataset_path.parent.mkdir(parents=True, exist_ok=True)
-    with dataset_path.open("x", encoding="utf-8") as stream:
-        for row in replay.rows:
-            stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
-    summary = {
-        "status": "incomplete",
-        "purpose": "evaluator_sanity_check",
-        "evaluation_scope": {
-            "response_source": "historical_captured_answers",
-            "dataset_role": "calibration_set",
-            "interpretation": "Regrading saved examples, not a new agent or deployed-endpoint run.",
-        },
-        "dataset_version": version,
-        "dataset_source": "inline_captured_answers",
-        "evaluator_input_format": "foundry_text_content_parts",
-        "dataset_path": str(dataset_path),
-        "dataset_sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
-        "project_endpoint": args.project_endpoint,
-        "judge_deployment": args.model_deployment,
-        "behavior_threshold": args.behavior_threshold,
-        "behavior_evaluator": replay.provenance["manifest"]["behavior_evaluator"],
-        "rubric_sha256": replay.provenance["rubric_sha256"],
-        "agent": {"name": "ask-hr", "version": "multiple_captured_local_versions"},
-        "responses_regenerated": 0,
-        "reference_review": replay.provenance["manifest"]["review"],
-        "replay": replay.provenance,
-    }
-    write_summary(summary_path, summary)
-    if args.prepare_replay:
-        summary["status"] = "prepared"
-        write_summary(summary_path, summary)
-        print(f"Prepared replay for reference review: {summary_path}")
-        return
-    print(f"Replaying saved answers: {summary_path}", flush=True)
-    try:
-        with AzureCliCredential(subscription=args.subscription, process_timeout=120) as credential:
-            score_reference_rows(
-                project_endpoint=args.project_endpoint,
-                evaluation_name=args.evaluation_name,
-                settings=EvaluationSettings(
-                    args.model_deployment,
-                    args.behavior_threshold,
-                    args.poll_interval,
-                    args.timeout,
-                ),
-                credential=credential,
-                rows=replay.rows,
-                generation_case_ids=replay.generation_case_ids,
-                summary=summary,
-                summary_path=summary_path,
-                request_timeout=args.request_timeout,
-            )
-        summary["judge_comparison"] = compare_reference_judgments(
-            summary, replay.expectations
-        )
-        summary["status"] = "completed"
-    finally:
-        write_summary(summary_path, summary)
-    print(f"Evaluator replay report: {summary_path}")
-    print(f"All labeled decisions agree: {summary['judge_comparison']['passed']}")
-
-
 def main() -> None:
     args = parse_args()
     check_evaluation_sdk(args.project_endpoint)
@@ -461,9 +317,6 @@ def main() -> None:
         return
     if args.benchmark_report is not None:
         score_benchmark_report(args)
-        return
-    if args.replay_cases is not None:
-        score_replay_cases(args)
         return
     cases = load_cases(args.cases)
     references = load_policy_references(args.references, cases)

@@ -137,8 +137,7 @@ class EvaluationSettings:
     model_deployment : str
         Model deployment used by the evaluators.
     pass_threshold : float
-        Minimum native rubric score on the 0-1 scale. Historical prompt replay
-        supplies its recorded 1-5 threshold instead.
+        Minimum native rubric score on the 0-1 scale.
     poll_interval : float
         Seconds between evaluation-run status checks.
     timeout : float
@@ -153,7 +152,6 @@ class EvaluationSettings:
 
 def dataset_schema(
     *,
-    references: bool = False,
     agent_inputs: bool = False,
     policy_answers: bool = False,
 ) -> DataSourceConfigCustom:
@@ -162,9 +160,6 @@ def dataset_schema(
 
     Parameters
     ----------
-    references : bool, default=False
-        Require reviewed reference answers (``ground_truth``) and saved
-        conversation messages (``agent_query``).
     agent_inputs : bool, default=False
         Require saved conversation messages (``agent_query``).
     policy_answers : bool, default=False
@@ -194,11 +189,10 @@ def dataset_schema(
             for name in ("citations", "tool_calls", "tool_definitions", "output_items")
         }
     )
-    if references or policy_answers:
-        properties["ground_truth"] = {"type": "string"}
     if policy_answers:
+        properties["ground_truth"] = {"type": "string"}
         properties["policy_query"] = {"type": "string"}
-    if references or agent_inputs:
+    if agent_inputs:
         properties["agent_query"] = {"type": "array", "items": {"type": "object"}}
     return DataSourceConfigCustom(
         type="custom",
@@ -217,7 +211,7 @@ def _dataset_field_mapping(fields: tuple[str, ...]) -> dict[str, str]:
 
 
 def built_in_criteria(
-    model_deployment: str, *, references: bool = False, agent_inputs: bool = False
+    model_deployment: str, *, agent_inputs: bool = False
 ) -> list[TestingCriterionAzureAIEvaluator]:
     """
     Map answer-row fields into the Foundry built-in quality evaluators.
@@ -226,9 +220,6 @@ def built_in_criteria(
     ----------
     model_deployment : str
         Model deployment used to score answers.
-    references : bool, default=False
-        Add completeness scoring against reviewed reference answers.
-        Also use saved conversations for conversation-aware evaluators.
     agent_inputs : bool, default=False
         Use saved conversation messages for relevance, groundedness,
         and intent-resolution scoring.
@@ -236,27 +227,21 @@ def built_in_criteria(
     Returns
     -------
     list of TestingCriterionAzureAIEvaluator
-        Criteria for relevance, groundedness, and intent resolution,
-        plus completeness when ``references`` is True.
+        Criteria for relevance, groundedness, and intent resolution.
         Agentic metrics use the captured structured response items.
-        Completeness uses the employee-facing answer text. English-only
-        Coherence is configured separately after reviewing response languages.
+        English-only Coherence is configured separately after reviewing
+        response languages.
     """
     fields = {
         "relevance": ("query", "response"),
         "groundedness": ("query", "response", "context", "tool_definitions"),
         "intent_resolution": ("query", "response", "tool_definitions"),
     }
-    if references:
-        fields["response_completeness"] = ("ground_truth", "response")
     criteria = []
     for name, input_fields in fields.items():
         data_mapping = _dataset_field_mapping(input_fields)
-        if name in {"relevance", "groundedness", "intent_resolution"}:
-            data_mapping["response"] = "{{item.output_items}}"
-        if (references or agent_inputs) and name in {
-            "relevance", "groundedness", "intent_resolution",
-        }:
+        data_mapping["response"] = "{{item.output_items}}"
+        if agent_inputs:
             data_mapping["query"] = "{{item.agent_query}}"
         criteria.append(
             TestingCriterionAzureAIEvaluator(
@@ -306,38 +291,6 @@ def policy_answer_criteria(model_deployment: str) -> list[TestingCriterionAzureA
             data_mapping=_dataset_field_mapping(("ground_truth", "response")),
         )
     ]
-
-
-def task_adherence_criterion(
-    model_deployment: str,
-) -> TestingCriterionAzureAIEvaluator:
-    """
-    Configure scoring for whether answers follow the recorded instructions.
-
-    Requires a saved generation request for each scored case.
-
-    Parameters
-    ----------
-    model_deployment : str
-        Judge deployment used by the built-in evaluator.
-
-    Returns
-    -------
-    TestingCriterionAzureAIEvaluator
-        Evaluator configuration using the saved conversation, answer, and
-        tool definitions. Scores are 0 (fail) or 1 (pass).
-    """
-    return TestingCriterionAzureAIEvaluator(
-        type="azure_ai_evaluator",
-        name="task_adherence",
-        evaluator_name="builtin.task_adherence",
-        initialization_parameters={"deployment_name": model_deployment},
-        data_mapping={
-            "query": "{{item.agent_query}}",
-            "response": "{{item.output_items}}",
-            "tool_definitions": "{{item.tool_definitions}}",
-        },
-    )
 
 
 def rubric_definition(threshold: float) -> dict[str, Any]:
@@ -457,46 +410,6 @@ def rubric_criterion(
             "response": "{{item.response}}",
             "tool_definitions": "{{item.tool_definitions}}",
         },
-    )
-
-
-def behavior_criterion(
-    evaluator: EvaluatorVersion, settings: EvaluationSettings
-) -> TestingCriterionAzureAIEvaluator:
-    """
-    Configure a historical prompt evaluator without registering a new version.
-
-    Parameters
-    ----------
-    evaluator : EvaluatorVersion
-        Registered evaluator version to pin for this run.
-    settings : EvaluationSettings
-        Judge deployment and recorded 1-5 historical passing score.
-
-    Returns
-    -------
-    TestingCriterionAzureAIEvaluator
-        Criterion using query, answer, expected behavior, policy context,
-        and structured citations from each submitted row.
-    """
-    return TestingCriterionAzureAIEvaluator(
-        type="azure_ai_evaluator",
-        name="behavioral_adherence",
-        evaluator_name=evaluator.name,
-        evaluator_version=evaluator.version,
-        initialization_parameters={
-            "deployment_name": settings.model_deployment,
-            "threshold": settings.pass_threshold,
-        },
-        data_mapping=_dataset_field_mapping(
-            (
-                "query",
-                "response",
-                "expected_behavior",
-                "context",
-                "citations",
-            ),
-        ),
     )
 
 
@@ -691,14 +604,6 @@ def _validate_scores(
             if error := _validate_rubric_score(result, threshold):
                 errors.append(f"{case_id}/hr_rubric: {error}")
             continue
-        if result["name"] == "task_adherence":
-            if type(value) not in (int, float, bool) or value not in (0, 1):
-                errors.append(f"{case_id}/task_adherence: invalid binary score")
-            elif type(result["passed"]) is not bool or result["passed"] != bool(value):
-                errors.append(
-                    f"{case_id}/task_adherence: pass flag disagrees with binary score"
-                )
-            continue
         if (
             type(value) not in (int, float)
             or not math.isfinite(value)
@@ -709,14 +614,6 @@ def _validate_scores(
             )
         elif type(result["passed"]) is not bool:
             errors.append(f"{case_id}/{result['name']}: missing pass/fail result")
-        elif threshold is not None and not float(value).is_integer():
-            errors.append(
-                f"{case_id}/{result['name']}: ordinal behavior score must be an integer"
-            )
-        elif threshold is not None and result["passed"] != (value >= threshold):
-            errors.append(
-                f"{case_id}/{result['name']}: pass flag disagrees with the configured threshold"
-            )
     return errors
 
 
@@ -867,8 +764,8 @@ def evaluation_summary(
     criterion_names : set of str
         Exact evaluator names expected for each case.
     threshold : float or None, default=None
-        Minimum native rubric score (0-1), or historical prompt score (1-5),
-        used to check reported pass/fail results. Leave unset for built-ins.
+        Minimum native rubric score (0-1), used to check its reported
+        pass/fail results. Leave unset for built-ins.
 
     Returns
     -------

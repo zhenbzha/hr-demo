@@ -104,32 +104,12 @@ internal citation messages as prose or claim
 source-only Groundedness. Historical reports remain unchanged.
 These are limited
 demo checks, not verification of every scenario-specific requirement.
-The judge is now GPT-5.4, separate from the main and Activity agent models.
-The notice case now asks about a week of annual leave, with the expected answer
-to generally submit the request seven days in advance. It replaces the
-exact-two-day question; the other 17 main cases and their references are unchanged.
-Two related judge-check examples and three legacy controls are removed, leaving
-14 active judge checks and 16 legacy controls. No interpretation side channel
-is added, and the disputed exact-two-day meaning is not asserted by this replacement.
-The PDFs and deployed agent are unchanged. The rubric uses the question's
-language and accepts honest acknowledgment of details absent from the policy.
-Earlier graders sometimes wrongly expected Chinese for an English question
-and English answer. This is a grading error, not an answer-language error.
-A fresh collection attempt also failed with HTTP 500 and a timeout.
-See the [saved results and limitations](../SHARING.md#evaluation-limitations).
-Old scores are not relabeled as v6 results, and regrading saved answers is not
-a new agent-performance baseline. The repeated seven-answer/control rechecks are
-calibration only. The rubric and completeness share an assistant-authored answer
-key, which HR must review before acceptance use.
-The earlier fresh 18-case GPT-5.5 run completed with two reported failures.
-Its boundary-based review conclusions depend on the earlier disputed key;
-the raw results are preserved, not reclassified. That run does not cover the
-replacement question.
-The revised suite was then retested live with GPT-5.5: **17/18 passed**, including
-the new week-of-leave question. Citation checks passed 18/18 and completeness
-passed 14/14. Only the EEM clarification failed the rubric; its score remains
-0.720588 against the unchanged 0.75 threshold.
-GPT-5.5 is a separately deployed comparison judge; GPT-5.4 remains the default.
+GPT-5.4 is the default judge, separate from the main and Activity agent models;
+GPT-5.5 is a comparison judge. The rubric uses the question's language and accepts
+honest acknowledgment of details absent from the policy. Its shared
+assistant-authored answer key requires HR review before acceptance use.
+See [evaluation limitations](../SHARING.md#evaluation-limitations) for scope
+and known failures.
 
 Review the saved report; add `--require-behavior-pass` when failed demo checks
 must produce a nonzero exit code.

@@ -20,7 +20,6 @@ from .agent import build_captured_agent_query, captured_response_items
 from .foundry import (
     MIN_RUBRIC_DIMENSION_SCORE,
     EvaluationSettings,
-    behavior_criterion,
     built_in_criteria,
     coherence_criterion,
     create_rubric_evaluator,
@@ -32,7 +31,6 @@ from .foundry import (
     rubric_definition,
     rubric_fingerprint,
     start_run,
-    task_adherence_criterion,
     wait_for_run,
 )
 from .references import REFERENCE_INPUT_CONTRACT, policy_evaluation_query
@@ -196,7 +194,7 @@ def run_stage(
         IDs of all cases submitted for scoring.
     label : str
         Report key for this stage. ``expected_behavior`` enables
-        validation against the configured HR behavior threshold.
+        validation against the configured native HR rubric threshold.
     inline_rows : list of dict
         Answer rows to submit directly.
     schema : DataSourceConfigCustom or None, default=None
@@ -246,135 +244,6 @@ def run_stage(
         raise RuntimeError(
             f"{label} returned incomplete/unscorable results; see {summary_path}"
         )
-
-
-def score_reference_rows(
-    *,
-    project_endpoint: str,
-    evaluation_name: str,
-    settings: EvaluationSettings,
-    credential: TokenCredential,
-    rows: list[dict[str, Any]],
-    generation_case_ids: set[str],
-    summary: dict[str, Any],
-    summary_path: Path,
-    request_timeout: float = 60,
-) -> None:
-    """
-    Score saved answers using their recorded HR evaluator version.
-
-    Submit the saved answers to the built-in quality evaluators and the
-    previously registered HR evaluator. Built-in scoring includes comparison
-    with reviewed reference answers. Scoring creates remote Foundry runs.
-
-    Parameters
-    ----------
-    project_endpoint : str
-        HTTPS Foundry project endpoint for scoring.
-    evaluation_name : str
-        Display-name prefix for the replay's scoring stages.
-    settings : EvaluationSettings
-        Judge deployment, HR threshold, and polling limits.
-    credential : TokenCredential
-        Entra credential with project/model/evaluation access.
-    rows : list of dict
-        Saved answers with reviewed reference text (``ground_truth``)
-        and recorded conversation messages (``agent_query``).
-    generation_case_ids : set of str
-        IDs of rows with recorded generation requests.
-        These rows also receive Task Adherence scoring.
-    summary : dict
-        Report to update, including agent and dataset details and the
-        ``behavior_evaluator`` name/version recorded with the saved answers.
-    summary_path : pathlib.Path
-        Local JSON report updated with run IDs, scores, and errors.
-    request_timeout : float, default=60
-        Maximum seconds for each HTTP request, capped at 60.
-        Polling is controlled by ``settings.timeout``.
-    """
-    summary["scoring_sdk_versions"] = {
-        name: version(name) for name in ("azure-ai-projects", "openai")
-    }
-    criteria = built_in_criteria(settings.model_deployment, references=True)
-    english_rows = reviewed_english_rows(rows, summary)
-    coherence = [coherence_criterion(settings.model_deployment)] if english_rows else []
-    task_criteria = [task_adherence_criterion(settings.model_deployment)]
-    with (
-        AIProjectClient(
-            endpoint=project_endpoint,
-            credential=credential,
-            allow_preview=True,
-            connection_timeout=30,
-            read_timeout=120,
-        ) as project,
-        project.get_openai_client(
-            timeout=min(request_timeout, 60), max_retries=0
-        ) as client,
-    ):
-        required = {
-            criterion["evaluator_name"] for criterion in criteria + task_criteria + coherence
-        }
-        catalog = {
-            evaluator.name: evaluator
-            for evaluator in project.evaluators.list(type="builtin", limit=20)
-            if evaluator.name in required
-        }
-        if missing := required - catalog.keys():
-            raise RuntimeError(
-                f"Required Foundry evaluators are unavailable: {sorted(missing)}"
-            )
-        summary["evaluator_catalog"] = {
-            name: {"name": evaluator.name, "version": evaluator.version}
-            for name, evaluator in catalog.items()
-        }
-        for criterion in criteria + task_criteria + coherence:
-            criterion["evaluator_version"] = catalog[
-                criterion["evaluator_name"]
-            ].version
-        selected = summary["behavior_evaluator"]
-        evaluator = project.evaluators.get_version(
-            name=selected["name"], version=selected["version"]
-        )
-        prompt = evaluator.definition.get("prompt_text")
-        if (
-            not isinstance(prompt, str)
-            or hashlib.sha256(prompt.encode()).hexdigest() != summary["rubric_sha256"]
-        ):
-            raise ValueError(
-                "The pinned HR evaluator does not match the recorded rubric"
-            )
-        behavior = [behavior_criterion(evaluator, settings)]
-        summary["criteria"] = {
-            "built_in": criteria,
-            "expected_behavior": behavior,
-            "task_adherence": task_criteria,
-            "english_coherence": coherence,
-        }
-        write_summary(summary_path, summary)
-        schema = dataset_schema(references=True)
-        stages = [
-            ("built_in", criteria, rows),
-            ("expected_behavior", behavior, rows),
-        ]
-        if english_rows:
-            stages.append(("english_coherence", coherence, english_rows))
-        generation_rows = [row for row in rows if row["case_id"] in generation_case_ids]
-        if generation_rows:
-            stages.append(("task_adherence", task_criteria, generation_rows))
-        for label, stage_criteria, stage_rows in stages:
-            print(f"Scoring {label}: {len(stage_rows)} captured answers", flush=True)
-            run_stage(
-                client=client,
-                name=evaluation_name + " - " + label,
-                criteria=stage_criteria,
-                settings=settings,
-                summary=summary,
-                summary_path=summary_path,
-                case_ids={row["case_id"] for row in stage_rows},
-                label=label,
-                inline_rows=stage_rows,
-                schema=schema,
-            )
 
 
 def score_dataset(

@@ -333,7 +333,7 @@ class ResponseCollectionTests(unittest.TestCase):
 
 
 class CaseValidationTests(unittest.TestCase):
-    def test_unscored_assertions_require_historical_replay(self):
+    def test_unscored_assertions_are_rejected(self):
         for field in (
             "expectedBehavior", "assertions",
             "expectedPrimaryDocumentIds", "expectedSupportingDocumentIds",
@@ -341,12 +341,10 @@ class CaseValidationTests(unittest.TestCase):
             with self.subTest(field=field):
                 case = {
                     "id": "test", "query": "Policy?", "hardRequirement": True,
-                    field: ["Historical requirement."],
+                    field: ["Unscored requirement."],
                 }
                 with self.assertRaisesRegex(ValueError, "unscored"):
                     cases._validate_case(case)
-                cases._validate_case(case, historical=True)
-                self.assertIn("Historical requirement.", cases.expected_behavior(case))
 
     def test_unknown_hard_requirements_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown/unsupported"):
@@ -399,12 +397,6 @@ class CaseValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(checks.status, expected)
 
-    def test_original_cases_can_still_be_loaded_for_historical_replay(self):
-        path = Path(__file__).resolve().parent / "agent-quality-cases-legacy.json"
-        loaded = cases.load_cases(path, historical=True)
-        self.assertEqual(len(loaded), 17)
-        self.assertIn("expectedRegionClassification", loaded[0])
-
     def test_rich_citation_requirement_rejects_empty_list(self):
         checks = cases.validate_case_result(
             {"requiredCitationFields": ["chunk_text"]}, agent_result()
@@ -451,27 +443,27 @@ class FoundryResultTests(unittest.TestCase):
             run=completed_run(),
             items=items,
             expected_case_ids={"test"},
-            criterion_names={"behavioral_adherence"},
+            criterion_names={"groundedness"},
             **kwargs,
         )
 
     def test_null_numeric_score_cannot_be_a_pass(self):
         summary = self.summary(
-            [scored_item("test", ("behavioral_adherence",), score=None)]
+            [scored_item("test", ("groundedness",), score=None)]
         )
         self.assertTrue(summary["validation_errors"])
 
     def test_nonfinite_and_boolean_quality_scores_are_rejected(self):
         for value in (float("nan"), float("inf"), True, 6, 0):
             with self.subTest(value=value):
-                item = scored_item("test", ("behavioral_adherence",))
+                item = scored_item("test", ("groundedness",))
                 item.results[0].score = value
                 summary = self.summary([item])
                 self.assertTrue(summary["validation_errors"])
 
     def test_nonfinite_scores_still_produce_a_writable_failure_report(self):
         summary = self.summary(
-            [scored_item("test", ("behavioral_adherence",), score=float("nan"))]
+            [scored_item("test", ("groundedness",), score=float("nan"))]
         )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "report.json"
@@ -479,40 +471,28 @@ class FoundryResultTests(unittest.TestCase):
             self.assertTrue(json.loads(path.read_text())["validation_errors"])
 
     def test_malformed_datasource_is_reported_as_unscorable(self):
-        item = scored_item("test", ("behavioral_adherence",))
+        item = scored_item("test", ("groundedness",))
         item.datasource_item = None
         self.assertTrue(self.summary([item])["validation_errors"])
 
-    def test_ordinal_behavior_score_must_be_an_integer(self):
-        summary = self.summary(
-            [scored_item("test", ("behavioral_adherence",), score=4.5)], threshold=4
-        )
-        self.assertTrue(summary["validation_errors"])
-
     def test_missing_or_duplicate_cases_are_rejected(self):
-        item = scored_item("test", ("behavioral_adherence",))
+        item = scored_item("test", ("groundedness",))
         self.assertTrue(self.summary([])["validation_errors"])
         self.assertTrue(self.summary([item, item])["validation_errors"])
 
-    def test_pass_flag_must_match_behavior_threshold(self):
-        summary = self.summary(
-            [scored_item("test", ("behavioral_adherence",), score=1)], threshold=4
-        )
-        self.assertTrue(summary["validation_errors"])
-
     def test_missing_or_duplicate_criteria_are_rejected(self):
-        item = scored_item("test", ("behavioral_adherence", "behavioral_adherence"))
+        item = scored_item("test", ("groundedness", "groundedness"))
         self.assertTrue(self.summary([item])["validation_errors"])
 
     def test_valid_scored_result_is_accepted(self):
         summary = self.summary(
-            [scored_item("test", ("behavioral_adherence",))], threshold=4
+            [scored_item("test", ("groundedness",))]
         )
         self.assertEqual(summary["validation_errors"], [])
 
     def test_timeout_requests_remote_run_cancellation(self):
         client = Mock()
-        settings = foundry.EvaluationSettings("judge", 4, 1, 2)
+        settings = foundry.EvaluationSettings("judge", 0.75, 1, 2)
         with (
             patch.object(foundry.time, "monotonic", side_effect=[0, 3]),
             self.assertRaisesRegex(TimeoutError, "cancellation requested"),
@@ -1049,27 +1029,36 @@ class NativeRubricTests(unittest.TestCase):
                     item.results[0].score = 0.9
                 self.assertTrue(self.summary(item)["validation_errors"])
 
-    def test_new_and_historical_cli_thresholds_are_not_silently_interchanged(self):
+    def test_cli_rejects_non_native_rubric_threshold(self):
         with tempfile.TemporaryDirectory() as temporary:
             args = ManualRunnerTests.arguments(Path(temporary))
             args.check_sdk = True
             parser = Mock()
             parser.error.side_effect = ValueError
             runner._validate_arguments(parser, args)
-            args.behavior_threshold = 4
-            with self.assertRaises(ValueError):
-                runner._validate_arguments(parser, args)
-            args.behavior_threshold = None
             args.rubric_threshold = 4
             with self.assertRaises(ValueError):
                 runner._validate_arguments(parser, args)
-            args.rubric_threshold = 0.75
-            args.replay_cases = args.cases
-            runner._validate_arguments(parser, args)
-            self.assertEqual(args.behavior_threshold, 4)
 
 
 class ManualRunnerTests(unittest.TestCase):
+    def test_retired_replay_options_are_rejected_before_configuration_validation(self):
+        for options in (
+            ["--replay-cases", "retired.json"],
+            ["--prepare-replay"],
+            ["--behavior-threshold", "4"],
+        ):
+            with (
+                self.subTest(options=options),
+                patch("sys.argv", ["run_foundry_evaluation.py", *options]),
+                patch("sys.stderr"),
+                patch.object(runner, "_validate_arguments") as validate,
+                self.assertRaises(SystemExit) as error,
+            ):
+                runner.parse_args()
+            self.assertEqual(error.exception.code, 2)
+            validate.assert_not_called()
+
     def test_judge_deployment_is_independent_of_generation(self):
         with patch.dict(
             runner.os.environ,
@@ -1129,7 +1118,6 @@ class ManualRunnerTests(unittest.TestCase):
             max_retry_seconds=0,
             model_deployment="judge",
             rubric_threshold=0.75,
-            behavior_threshold=None,
             poll_interval=1,
             timeout=60,
             dataset_name="manual-test",
@@ -1138,8 +1126,6 @@ class ManualRunnerTests(unittest.TestCase):
             require_behavior_pass=False,
             check_sdk=False,
             benchmark_report=None,
-            replay_cases=None,
-            prepare_replay=False,
         )
 
     def test_scoring_failure_preserves_the_report_and_cleans_local_dataset(self):
@@ -1310,6 +1296,60 @@ class ManualRunnerTests(unittest.TestCase):
 
 
 class CapturedBenchmarkTests(unittest.TestCase):
+    def test_captured_context_does_not_require_or_fabricate_ground_truth(self):
+        schema = foundry.dataset_schema(agent_inputs=True)["item_schema"]
+        self.assertIn("agent_query", schema["required"])
+        self.assertNotIn("ground_truth", schema["properties"])
+        criteria = {
+            item["name"]: item
+            for item in foundry.built_in_criteria("judge", agent_inputs=True)
+        }
+        self.assertEqual(len(criteria), 3)
+        for name in ("relevance", "groundedness", "intent_resolution"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    criteria[name]["data_mapping"]["query"], "{{item.agent_query}}"
+                )
+                self.assertEqual(
+                    criteria[name]["data_mapping"]["response"], "{{item.output_items}}"
+                )
+
+    def test_inline_scoring_uses_captured_items_not_an_agent_target(self):
+        client = Mock()
+        client.evals.create.return_value = SimpleNamespace(id="eval")
+        client.evals.runs.create.return_value = completed_run()
+        client.evals.runs.output_items.list.return_value = [
+            scored_item("captured", ("groundedness",))
+        ]
+        rows = [{"case_id": "captured"}]
+        schema = foundry.dataset_schema(agent_inputs=True)
+        summary = {
+            "agent": {"name": "ask-hr", "version": "captured"},
+            "dataset_version": "captured",
+            "dataset_id": "azureai://lineage-only",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            scoring.run_stage(
+                client=client,
+                name="benchmark",
+                criteria=[{"name": "groundedness"}],
+                settings=foundry.EvaluationSettings("judge", 0.75, 1, 60),
+                summary=summary,
+                summary_path=Path(temporary) / "summary.json",
+                case_ids={"captured"},
+                label="built_in",
+                inline_rows=rows,
+                schema=schema,
+            )
+        self.assertEqual(summary["built_in"]["validation_errors"], [])
+        self.assertEqual(
+            client.evals.create.call_args.kwargs["data_source_config"], schema
+        )
+        source = client.evals.runs.create.call_args.kwargs["data_source"]["source"]
+        self.assertEqual(
+            source, {"type": "file_content", "content": [{"item": rows[0]}]}
+        )
+
     @staticmethod
     def benchmark_arguments(root: Path) -> SimpleNamespace:
         args = ManualRunnerTests.arguments(root)

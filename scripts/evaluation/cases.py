@@ -9,7 +9,7 @@ from typing import Any
 
 from .agent import AgentResult, captured_response_items
 
-LEGACY_ASSERTION_FIELDS = {
+UNSCORED_ASSERTION_FIELDS = {
     "expectedBehavior",
     "assertions",
     "expectedPrimaryDocumentIds",
@@ -28,11 +28,6 @@ CASE_FIELDS = LIST_FIELDS | {
     "query",
     "hardRequirement",
     "expectedCitationCount",
-}
-LEGACY_EXECUTION_FIELDS = {
-    "expectedRegionClassification",
-    "expectedRetrieval",
-    "expectedRetrievalRegions",
 }
 
 
@@ -59,25 +54,21 @@ class CaseChecks:
         return "passed"
 
 
-def _validate_case(case: Any, *, historical: bool = False) -> None:
-    if not historical and isinstance(case, dict) and case.keys() & LEGACY_ASSERTION_FIELDS:
+def _validate_case(case: Any) -> None:
+    if isinstance(case, dict) and case.keys() & UNSCORED_ASSERTION_FIELDS:
         raise ValueError(
             "Native demo cases cannot declare unscored free-text assertions or "
             "primary/supporting evidence roles; use the fixed rubric, PDF references "
-            "and expectedDocumentIds. Historical replay retains these fields."
+            "and expectedDocumentIds."
         )
-    allowed = (
-        CASE_FIELDS | LEGACY_ASSERTION_FIELDS | LEGACY_EXECUTION_FIELDS
-        if historical else CASE_FIELDS
-    )
-    if not isinstance(case, dict) or case.keys() - allowed:
+    if not isinstance(case, dict) or case.keys() - CASE_FIELDS:
         raise ValueError("Evaluation case contains unknown/unsupported fields")
     for name in ("id", "query"):
         if not isinstance(case.get(name), str) or not case[name].strip():
             raise ValueError(f"Case {name} must be a nonempty string")
     if type(case.get("hardRequirement")) is not bool:
         raise ValueError(f"{case['id']}: hardRequirement must be a boolean")
-    for name in (LIST_FIELDS | LEGACY_ASSERTION_FIELDS) & case.keys():
+    for name in LIST_FIELDS & case.keys():
         if not isinstance(case[name], list) or any(
             not isinstance(value, str) or not value.strip() for value in case[name]
         ):
@@ -91,7 +82,7 @@ def _validate_case(case: Any, *, historical: bool = False) -> None:
         raise ValueError("expectedCitationCount must be a nonnegative integer")
 
 
-def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
+def load_cases(path: Path) -> list[dict[str, Any]]:
     """
     Validate a case file and select the cases this evaluator will run.
 
@@ -103,10 +94,6 @@ def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
         expectations name source IDs, citation fields, or regions. Native
         cases cannot declare free-text assertions or primary/supporting roles
         that the deterministic checks do not verify.
-    historical : bool, default=False
-        Allow free-text assertions and evidence-role fields for the recorded
-        prompt evaluator, plus retired execution fields for capture integrity.
-        Retired execution fields are not evaluated.
 
     Returns
     -------
@@ -124,7 +111,7 @@ def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
     if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
         raise ValueError("Evaluation dataset must contain a cases array")
     for case in payload["cases"]:
-        _validate_case(case, historical=historical)
+        _validate_case(case)
     identifiers = [case["id"] for case in payload["cases"]]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("Evaluation case IDs must be unique")
@@ -136,26 +123,24 @@ def load_cases(path: Path, *, historical: bool = False) -> list[dict[str, Any]]:
 
 def expected_behavior(case: dict[str, Any]) -> str:
     """
-    Preserve case expectations for capture integrity and historical replay.
+    Preserve citation expectations to verify saved capture integrity.
 
     Parameters
     ----------
     case : dict
-        Validated case with optional ``expectedBehavior``, ``assertions``,
-        expected/forbidden source IDs or regions, and citation requirements.
+        Validated case with expected/forbidden source IDs or regions,
+        and citation requirements.
 
     Returns
     -------
     str
-        Historical prompt-evaluator instructions or native citation metadata.
+        Serialized citation metadata.
         The native rubric does not consume this field; its scoring requirements
         are defined in the registered rubric and separate citation checks.
     """
-    instructions = [*case.get("expectedBehavior", []), *case.get("assertions", [])]
+    instructions = []
     for key, label in (
         ("expectedDocumentIds", "Use evidence from documents"),
-        ("expectedPrimaryDocumentIds", "Primary policy evidence must come from"),
-        ("expectedSupportingDocumentIds", "Supporting policy evidence must include"),
         ("forbiddenRegions", "Do not cite regions"),
         ("allowedCitationRegions", "Cited regions must be limited to"),
         ("forbiddenDocumentIds", "Do not cite documents"),
