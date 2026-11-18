@@ -3,14 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from agent_framework import AgentResponse, AgentResponseUpdate, Content, ResponseStream
+from azure.ai.agentserver.core import AgentServerHost
+from microsoft_agents.activity import ResourceResponse
 from pydantic import ValidationError
 from region_classification import RegionDecision
+from starlette.testclient import TestClient
 
+state_directory = tempfile.TemporaryDirectory(prefix="ask-hr-tests-")
+unittest.addModuleCleanup(state_directory.cleanup)
+initialize_host = AgentServerHost.__init__
 with (
     patch.dict(
         os.environ,
@@ -21,16 +28,154 @@ with (
             "AZURE_AI_MODEL_DEPLOYMENT_NAME": "test-generation",
             "AZURE_AI_CLASSIFIER_MODEL_DEPLOYMENT_NAME": "test-classification",
             "ASK_HR_SUPPORTED_REGIONS_JSON": '{"finland":"Finland"}',
+            "AGENTSERVER_STATE_ROOT": state_directory.name,
+            "FOUNDRY_HOSTING_ENVIRONMENT": "",
         },
     ),
     patch("agent_framework.Agent") as agent_factory,
     patch("agent_framework.foundry.FoundryChatClient"),
+    patch.object(
+        AgentServerHost,
+        "__init__",
+        autospec=True,
+        side_effect=lambda self, **kwargs: initialize_host(
+            self, configure_observability=None, **kwargs
+        ),
+    ),
 ):
     import ask_hr_pipeline as pipeline
-
-with patch("azure.ai.agentserver.responses.ResponsesAgentServerHost") as host:
-    host.return_value.response_handler.side_effect = lambda handler: handler
     import main as responses_adapter
+
+
+class CombinedHostTests(unittest.TestCase):
+    def test_both_protocols_use_one_host_and_preserve_delegated_access(self) -> None:
+        activity_app = responses_adapter.activity_app
+        with (
+            patch.object(
+                pipeline,
+                "classify_regions",
+                new=AsyncMock(
+                    return_value=RegionDecision(
+                        status="clarify", message="Which country?"
+                    )
+                ),
+            ) as classify,
+            patch.object(
+                pipeline,
+                "answer_question",
+                new=AsyncMock(return_value=("Authorized Activity answer", [])),
+            ) as answer,
+            patch.object(
+                activity_app.auth,
+                "get_token",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(token="activity-search-token")
+                ),
+            ) as get_token,
+            patch.object(
+                activity_app.adapter,
+                "send_activities",
+                new=AsyncMock(return_value=[ResourceResponse(id="status-message")]),
+            ),
+            patch.object(
+                activity_app.adapter,
+                "update_activity",
+                new=AsyncMock(return_value=ResourceResponse(id="status-message")),
+            ) as update_activity,
+            TestClient(responses_adapter.app) as client,
+        ):
+            for headers in (
+                {"x-client-search-authorization": "responses-search-token"},
+                {"x-agent-user-id": "trusted-user"},
+            ):
+                with self.subTest(headers=list(headers)):
+                    rejected = client.post(
+                        "/responses",
+                        headers=headers,
+                        json={"input": "Question", "store": False},
+                    )
+                    self.assertEqual(rejected.status_code, 500)
+                    self.assertIn("error", rejected.json())
+                    classify.assert_not_awaited()
+
+            response = client.post(
+                "/responses",
+                headers={
+                    "x-client-search-authorization": "responses-search-token",
+                    # The local SDK header stands in for Foundry's trusted context.
+                    "x-agent-user-id": "trusted-user",
+                },
+                json={"input": "Question", "stream": True, "store": True},
+            )
+            self.assertEqual(response.status_code, 200)
+            events = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.text.splitlines()
+                if line.startswith("data: ") and line != "data: [DONE]"
+            ]
+            self.assertEqual(events[-1]["type"], "response.completed")
+            self.assertEqual(
+                events[-1]["response"]["output"][0]["content"][0]["text"],
+                "Which country?",
+            )
+            classify.assert_awaited_once_with("Question", [])
+
+            response_id = events[-1]["response"]["id"]
+            follow_up = client.post(
+                "/responses",
+                headers={
+                    "x-client-search-authorization": "responses-search-token",
+                    "x-agent-user-id": "trusted-user",
+                },
+                json={
+                    "input": "Follow-up",
+                    "previous_response_id": response_id,
+                    "store": False,
+                },
+            )
+            self.assertEqual(follow_up.status_code, 200)
+            self.assertEqual(follow_up.json()["status"], "completed")
+            self.assertEqual(classify.await_args.args, ("Follow-up", ["Question"]))
+
+            activity = {
+                "type": "message",
+                "id": "turn-1",
+                "text": "Question",
+                "channelId": "emulator",
+                "serviceUrl": "https://example.test",
+                "from": {"id": "activity-user"},
+                "recipient": {"id": "ask-hr"},
+                "conversation": {"id": "activity-conversation"},
+            }
+            response = client.post("/activity/messages", json=activity)
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(get_token.await_args.args[1], "SEARCH")
+            self.assertEqual(
+                answer.await_args.kwargs["user_search_token"],
+                "activity-search-token",
+            )
+            self.assertEqual(answer.await_args.kwargs["previous_questions"], [])
+            self.assertEqual(
+                update_activity.await_args.args[1].text, "Authorized Activity answer"
+            )
+
+            activity.update(id="turn-2", text="Follow-up")
+            response = client.post("/activity/messages", json=activity)
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(
+                answer.await_args.kwargs["previous_questions"], ["Question"]
+            )
+
+            get_token.return_value = None
+            answer.reset_mock()
+            activity.update(id="turn-3", text="No token")
+            response = client.post("/activity/messages", json=activity)
+            self.assertEqual(response.status_code, 202)
+            answer.assert_not_awaited()
+            self.assertIn(
+                "couldn't verify your access",
+                update_activity.await_args.args[1].text,
+            )
 
 
 def model_stream(

@@ -782,11 +782,10 @@ to their hashes, the generation reasoning effort, and a response-schema template
 Each generated case records its actual response schema, including the allowed
 source IDs, before answer-source selection. Cases that skip generation record no
 generation schema.
-The main agent uses GPT-6 Astra with high reasoning to improve coverage of the
+The unified agent uses GPT-6 Astra with high reasoning to improve coverage of the
 supplied policies; keep this setting fixed when testing ingestion or retrieval changes.
-`AZURE_AI_MODEL_DEPLOYMENT_NAME` selects main-agent generation,
-`ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME` selects the judge, and
-`AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME` keeps the Activity POC on GPT-6.1 Sol.
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` selects generation for both Responses and Activity;
+`ASK_HR_EVAL_MODEL_DEPLOYMENT_NAME` independently selects the judge.
 Normal benchmark scoring uses the recorded generation
 conversation for relevance, groundedness, and intent resolution. It verifies the
 instruction hash and agreement between the recorded question, policy context,

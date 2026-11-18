@@ -3,11 +3,17 @@ from __future__ import annotations
 import logging
 import re
 
-from azure.ai.agentserver.activity import ActivityAgentServerHost
+import ask_hr_pipeline
+from activity_authorization import ActivityAuthorization
+from activity_format import format_activity_answer
 from azure.ai.agentserver.activity import FoundryStorage, get_hosted_agent_env
 from azure.ai.agentserver.core import AgentConfig
-from microsoft_agents.activity import Activity, ActivityTypes, InvokeResponse
-from microsoft_agents.activity import load_configuration_from_env
+from microsoft_agents.activity import (
+    Activity,
+    ActivityTypes,
+    InvokeResponse,
+    load_configuration_from_env,
+)
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.core import (
     AgentApplication,
@@ -19,11 +25,6 @@ from microsoft_agents.hosting.core import (
     TurnContext,
     TurnState,
 )
-
-import ask_hr_pipeline
-from activity_authorization import ActivityAuthorization
-from activity_format import format_activity_answer
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,7 +58,6 @@ app = AgentApplication[TurnState](
     ),
     authorization=authorization,
 )
-host = ActivityAgentServerHost(agent_app=app)
 logger.info(
     "Activity authorization implementation: %s.%s",
     type(app.auth).__module__,
@@ -175,7 +175,3 @@ async def on_error(context: TurnContext, error: Exception) -> None:
             "I couldn't verify your access to the requested HR policy information."
         )
     )
-
-
-if __name__ == "__main__":
-    host.run()

@@ -118,14 +118,37 @@ function Ensure-FederatedCredential {
 $subscriptionId = Invoke-AzdValue 'AZURE_SUBSCRIPTION_ID'
 $tenantId = Invoke-AzdValue 'AZURE_TENANT_ID'
 $resourceGroup = Invoke-AzdValue 'AZURE_RESOURCE_GROUP'
-$botName = Invoke-AzdValue 'AGENT_ASK_HR_ACTIVITY_BOT_NAME'
+$botName = Invoke-AzdValue 'AGENT_ASK_HR_BOT_NAME'
+$projectId = Invoke-AzdValue 'AZURE_AI_PROJECT_ID'
+$agentEndpoint = Invoke-OptionalAzdValue 'AGENT_ASK_HR_ACTIVITY_ENDPOINT'
+if (-not $agentEndpoint) {
+    $agentEndpoint = az bot show `
+        --subscription $subscriptionId `
+        --resource-group $resourceGroup `
+        --name $botName `
+        --query properties.endpoint `
+        --output tsv
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agentEndpoint)) {
+        throw 'Unable to resolve the deployed Activity bot endpoint.'
+    }
+    $agentEndpoint = $agentEndpoint.Trim()
+}
+$agentName = 'ask-hr'
+$endpointUri = [Uri]$agentEndpoint
+if (
+    $endpointUri.Scheme -ne 'https' -or
+    $endpointUri.AbsolutePath -notlike "*/agents/$agentName/endpoint/protocols/*"
+) {
+    throw 'The Activity endpoint must belong to the unified ask-hr agent. Deploy it before configuring SSO.'
+}
 $searchResourceAppId = '880da380-985e-4198-81b9-e05b1cc53158'
 $searchDelegatedPermissionId = 'a4165a31-5d9e-4120-bd1e-9d88c66fd3b8'
 $oauthConnectionName = 'ask-hr-search-sso'
 $displayName = 'Ask HR Activity POC'
 $issuer = "https://login.microsoftonline.com/$tenantId/v2.0"
-$agent = azd ai agent show ask-hr-activity --output json | ConvertFrom-Json
+$agent = azd ai agent show $agentName --output json | ConvertFrom-Json
 if (
+    $LASTEXITCODE -ne 0 -or
     -not $agent.instance_identity.client_id -or
     -not $agent.instance_identity.principal_id
 ) {
@@ -134,6 +157,16 @@ if (
 $agentClientId = $agent.instance_identity.client_id
 $agentPrincipalId = $agent.instance_identity.principal_id
 $ssoResource = "api://botid-$agentClientId"
+
+$account = az account show --query '{subscription:id,tenant:tenantId}' --output json |
+    ConvertFrom-Json
+if (
+    $LASTEXITCODE -ne 0 -or
+    $account.subscription -ne $subscriptionId -or
+    $account.tenant -ne $tenantId
+) {
+    throw 'Select the azd environment subscription in Azure CLI before configuring Activity SSO.'
+}
 
 $appId = Invoke-OptionalAzdValue 'ASK_HR_ACTIVITY_BOT_APP_ID'
 if ($appId) {
@@ -299,13 +332,7 @@ Ensure-FederatedCredential `
     -Subject $subject `
     -Description 'Azure Bot token store obtains exchangeable user tokens.'
 
-$agentEndpoint = $agent.agent_endpoints.Agent
-$agentScope = (
-    "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/" +
-    "providers/Microsoft.CognitiveServices/accounts/" +
-    "aif-askhr-3yw342ef3vpq2/projects/ask-hr-project/" +
-    "agents/ask-hr-activity"
-)
+$agentScope = "$($projectId.TrimEnd('/'))/agents/$agentName"
 foreach ($consumerPrincipal in @($servicePrincipal, $agentPrincipalId)) {
     $consumerRole = az role assignment list `
         --assignee-object-id $consumerPrincipal `
@@ -331,11 +358,7 @@ $botBody = @{
     sku = @{ name = 'F0' }
     properties = @{
         displayName = 'Ask HR Activity POC'
-        endpoint = (
-            "https://aif-askhr-3yw342ef3vpq2.services.ai.azure.com/" +
-            "api/projects/ask-hr-project/agents/ask-hr-activity/" +
-            "endpoint/protocols/activityProtocol?api-version=2025-05-15-preview"
-        )
+        endpoint = $agentEndpoint
         msaAppId = $agentClientId
         msaAppTenantId = $tenantId
         msaAppType = 'SingleTenant'
@@ -393,7 +416,7 @@ New-Item -ItemType Directory -Path $packageDirectory | Out-Null
 $manifest = @{
     '$schema' = 'https://developer.microsoft.com/json-schemas/teams/v1.22/MicrosoftTeams.schema.json'
     manifestVersion = '1.22'
-    version = '5.0.1'
+    version = '5.0.2'
     id = $appId
     developer = @{
         name = 'Microsoft'
@@ -404,8 +427,8 @@ $manifest = @{
     icons = @{ color = 'color.png'; outline = 'outline.png' }
     name = @{ short = 'Ask HR Activity'; full = 'Ask HR Activity POC' }
     description = @{
-        short = 'Tests Ask HR as a Foundry Activity agent.'
-        full = 'Tests Teams SSO, Search OBO, and Ask HR answers directly in a Foundry Activity agent.'
+        short = 'Ask HR through its Foundry Activity endpoint.'
+        full = 'Teams SSO, delegated Search access, and HR answers from the same Ask HR agent used by the web application.'
     }
     accentColor = '#047857'
     copilotAgents = @{

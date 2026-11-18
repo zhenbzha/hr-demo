@@ -18,6 +18,9 @@
 
 ask-hr/src/ask-hr/packages/
 ask-hr/src/ask-hr/activityAppPackage/
+ask-hr/src/ask-hr/appPackage.zip
+ask-hr/src/ask-hr/.appPackage.zip.azd-generated
+ask-hr/src/ask-hr/TEAMS_APP_SETUP.md
 
 **/.pnp
 **/.pnp.*

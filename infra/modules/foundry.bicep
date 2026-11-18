@@ -1,8 +1,6 @@
 targetScope = 'resourceGroup'
 
 param accountName string
-param activityDeploymentName string
-param activityModelCapacity int = 100
 param classifierDeploymentName string
 param classifierModelCapacity int = 10
 param evaluationDeploymentName string
@@ -30,19 +28,6 @@ module account 'br/public:avm/res/cognitive-services/account:0.19.1' = {
         raiPolicyName: 'Microsoft.DefaultV2'
         sku: {
           capacity: classifierModelCapacity
-          name: 'GlobalStandard'
-        }
-      }
-      {
-        model: {
-          format: 'OpenAI'
-          name: 'gpt-6.1-sol'
-          version: '2026-09-29'
-        }
-        name: activityDeploymentName
-        raiPolicyName: 'Microsoft.DefaultV2'
-        sku: {
-          capacity: activityModelCapacity
           name: 'GlobalStandard'
         }
       }
@@ -122,7 +107,6 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2026-03-01' = {
 output accountId string = account.outputs.resourceId
 output accountName string = account.outputs.name
 output accountPrincipalId string = account.outputs.?systemAssignedMIPrincipalId ?? ''
-output activityDeploymentName string = activityDeploymentName
 output classifierDeploymentName string = classifierDeploymentName
 output embeddingDeploymentName string = embeddingDeploymentName
 output evaluationDeploymentName string = evaluation.outputs.deploymentName

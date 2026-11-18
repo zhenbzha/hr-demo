@@ -35,7 +35,7 @@ tokens per minute (`GlobalStandard` capacity 100). Bicep and the agent's
 `azure.yaml` keep these allocations aligned; the classifier remains at capacity 10.
 
 The root post-provisioning hook, `scripts\provision_entra.ps1`, validates the
-model outputs before making Azure changes. It synchronizes the main, Activity,
+model outputs before making Azure changes. It synchronizes the generation,
 judge, and classifier model bindings to `ASK_HR_AGENT_ENV_NAME` (default
 `ask-hr-dev`) in the nested `ask-hr` project, including existing environments.
 
@@ -91,11 +91,11 @@ to HR, without inventing approval or prohibition and without attaching
 unrelated citations. Empty retrieval results take this deterministic path without
 an additional generation call.
 
-The main agent uses GPT-6 Astra with high reasoning; classification remains a
-separate lightweight call. GPT-5.4 is the evaluation judge. GPT-6.1 Sol remains
-the Activity POC model (the separate Teams/Microsoft 365 prototype).
+One `ask-hr` agent exposes both Responses and Activity, using GPT-6 Astra with
+high reasoning for both protocols. Classification remains a separate lightweight
+call. GPT-5.4 is the evaluation judge.
 Bicep provisions the judge through `infra\modules\evaluation-model.bicep`;
-separate environment bindings prevent a judge change from switching either agent.
+separate environment bindings prevent a judge change from switching generation.
 The answer-generation prompt requires
 source-faithful quantities, units, and inclusive/exclusive limits when translating
 or summarizing.
@@ -251,6 +251,8 @@ credentials, virtual environments, evaluation state, and test tooling while
 retaining the bundled Linux dependencies in `packages`. The legacy
 `.azdignore` is not the agent-specific packaging filter.
 
-From the `ask-hr` directory, deploy the Responses service with
+From the `ask-hr` directory, deploy the dual-protocol service with
 `azd deploy ask-hr --no-prompt`. This normal packaging path supplies the
 `code-zip` artifact metadata required by the hosted-agent extension.
+See the [hosted-agent migration steps](ask-hr/README.md#migrating-the-activity-poc)
+before switching the existing Activity Teams app.

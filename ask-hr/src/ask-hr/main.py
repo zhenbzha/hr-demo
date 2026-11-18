@@ -7,6 +7,8 @@ import json
 from typing import Any, cast
 
 import ask_hr_pipeline
+from activity_app import app as activity_app
+from azure.ai.agentserver.activity import ActivityAgentServerHost
 from azure.ai.agentserver.responses import (
     CreateResponse,
     ResponseContext,
@@ -17,7 +19,13 @@ from azure.ai.agentserver.responses import (
 from azure.ai.agentserver.responses.models import Annotation, UrlCitationBody
 from permission_contract import require_security_context
 
-app = ResponsesAgentServerHost(
+
+class AskHRServer(ActivityAgentServerHost, ResponsesAgentServerHost):
+    """Compose Activity and Responses routes on one SDK-managed server."""
+
+
+app = AskHRServer(
+    agent_app=activity_app,
     options=ResponsesServerOptions(default_fetch_history_count=12),
 )
 
