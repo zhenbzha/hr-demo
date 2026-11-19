@@ -6,6 +6,9 @@ Activity 2.0.0 protocols from the same `main.py` process. Both adapters share
 The SDK composes both route sets on one server; there is no second agent or
 protocol-to-protocol proxy.
 
+This guide describes the authenticated `main` configuration. For the separate
+no-login web demo, see the [branch details](../README.md#try-it).
+
 ## Authentication and retrieval
 
 Responses requests must contain:
@@ -52,12 +55,9 @@ The current Search index has no permission metadata, so valid users still see
 the same corpus. The token-forwarding contract is ready for the later native
 ACL/index migration.
 
-Ask HR is a Microsoft Foundry hosted agent that answers regional HR policy
-questions for India, Finland, and Hong Kong, using Global policy as a baseline.
-
 ## Behavior
 
-- Identifies supported employment regions from natural-language questions.
+- Identifies India, Finland, and Hong Kong from natural-language questions.
 - Asks for clarification when the region is ambiguous.
 - Retrieves local and Global policy evidence separately.
 - Gives local policy precedence when local and Global guidance overlap.
@@ -84,6 +84,10 @@ src/ask-hr/
 ```
 
 ## Required environment values
+
+The agent uses Python 3.13 or later and its own dependencies under
+`src\ask-hr`. Do not substitute the root ingestion/evaluation environment for
+the agent environment.
 
 The active `azd` environment supplies:
 
@@ -113,27 +117,40 @@ azd deploy ask-hr --no-prompt
 The post-deploy hook grants the hosted-agent identity read access to the Search
 index. Each successful deployment creates an immutable agent version.
 
-### Migrating the Activity POC
+### Teams setup
 
-These are deployment steps, not actions performed by editing this repository:
+After deploying the agent, configure its direct Activity integration:
 
-1. Deploy the unified `ask-hr` version and verify its existing Responses clients.
-2. Confirm the selected nested azd environment contains `AZURE_AI_PROJECT_ID`
-   and `AGENT_ASK_HR_BOT_NAME` from that deployment. The SSO helper uses
+1. Confirm the selected nested azd environment contains `AZURE_AI_PROJECT_ID`
+   and `AGENT_ASK_HR_BOT_NAME` from the deployment. The SSO helper uses
    `AGENT_ASK_HR_ACTIVITY_ENDPOINT` when available, otherwise it reads the
    registered Azure Bot endpoint. The URL must belong to `ask-hr`, not the old
    `ask-hr-activity` agent. Azure CLI must select the same subscription and tenant
    as this azd environment before running the directory configuration commands.
-3. Run `.\scripts\configure_activity_sso.ps1` to bind the new bot and delegated
+2. Run `.\scripts\configure_activity_sso.ps1` to bind the bot and delegated
    Search OAuth connection to the `ask-hr` identity and regenerate the Teams
    package. This changes Azure/Entra configuration and requires separate approval.
-4. Publish the generated package using `.\scripts\publish_activity_teams.ps1`.
+3. Publish the generated package using `.\scripts\publish_activity_teams.ps1`.
    Open the returned `installLink` and complete **Add/Update** in Teams before
    testing. Publishing updates the Developer Portal package, not an existing
    Teams installation. Verify sign-in, token exchange, an authorized HR answer,
    and follow-up history.
-5. Only after both protocols work in Azure, separately retire the old
-   `ask-hr-activity` deployment and its bot and the unused GPT-6.1 Sol deployment.
+
+These commands change Azure, Entra, or Teams state. Editing this repository
+does not perform them.
+
+### Migrating the Activity POC
+
+This section applies only to installations with the former separate
+`ask-hr-activity` agent and bot.
+
+<details>
+<summary>Upgrade an existing separate Activity deployment</summary>
+
+Deploy the unified `ask-hr` agent, follow [Teams setup](#teams-setup), and verify
+both the existing Responses clients and the Teams flow. Only after both
+protocols work in Azure, separately retire the old `ask-hr-activity` deployment
+and its bot and the unused GPT-6.1 Sol deployment.
 
 The existing Activity app ID, token-store federation settings, and package name
 are retained for migration; they do not represent a second Foundry agent.
@@ -145,6 +162,8 @@ Responses adapter remains unchanged.
 Bicep and `azure.yaml` no longer declare the separate Activity model or
 `AZURE_AI_ACTIVITY_MODEL_DEPLOYMENT_NAME`. Removing those declarations does not
 itself retire existing Azure resources or clear old local azd values.
+
+</details>
 
 ## Validate
 
