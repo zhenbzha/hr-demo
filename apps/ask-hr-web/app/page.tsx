@@ -3,12 +3,18 @@ import { ChatShell } from "@/components/chat/chat-shell";
 import { Card } from "@/components/ui/card";
 import { authErrorMessage } from "@/lib/auth/auth-errors";
 import { getCurrentSession } from "@/lib/auth/session";
+import { config } from "@/lib/config";
+
+export const dynamic = "force-dynamic";
 
 export default async function Home({
   searchParams,
 }: {
   searchParams: Promise<{ authError?: string }>;
 }) {
+  if (config.publicDemoEnabled) {
+    return <ChatShell />;
+  }
   const [session, params] = await Promise.all([
     getCurrentSession(),
     searchParams,

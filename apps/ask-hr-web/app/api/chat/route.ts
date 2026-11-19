@@ -5,6 +5,7 @@ import {
   acquireSearchToken,
   ReauthenticationRequiredError,
 } from "@/lib/auth/tokens";
+import { config } from "@/lib/config";
 import { invokeAgentStream } from "@/lib/foundry/client";
 import { parseChatRequest } from "@/lib/validation/chat-request";
 
@@ -12,8 +13,10 @@ export const runtime = "nodejs";
 export const maxDuration = 180;
 
 export async function POST(request: NextRequest) {
-  const session = await getCurrentSession();
-  if (!session?.account) {
+  const session = config.publicDemoEnabled
+    ? undefined
+    : await getCurrentSession();
+  if (!config.publicDemoEnabled && !session?.account) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -32,12 +35,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const searchToken = await acquireSearchToken(session);
+    const searchToken = session ? await acquireSearchToken(session) : undefined;
     const streamAbort = new AbortController();
     const events = await invokeAgentStream({
       message: chatRequest.message,
       searchToken,
-      userObjectId: session.account.localAccountId,
+      userObjectId:
+        session?.account?.localAccountId ?? config.foundryCallerObjectId,
       previousResponseId: chatRequest.previousResponseId,
       signal: AbortSignal.any([request.signal, streamAbort.signal]),
     });

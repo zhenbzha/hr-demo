@@ -3,6 +3,7 @@ import { text } from "node:stream/consumers";
 import { NextResponse } from "next/server";
 
 import { getCurrentSession } from "@/lib/auth/session";
+import { config } from "@/lib/config";
 import { referencePaths } from "@/lib/references/paths";
 import type { AnnotationPage } from "@/lib/references/types";
 import { referenceFileSystem } from "@/lib/storage/datalake";
@@ -99,8 +100,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ documentId: string; version: string }> },
 ) {
-  const session = await getCurrentSession();
-  if (!session?.account) {
+  if (!config.publicDemoEnabled && !(await getCurrentSession())?.account) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -9,6 +9,7 @@ param generationDeploymentName string
 param keyVaultUri string
 param location string
 param logAnalyticsWorkspaceResourceId string
+param publicDemoEnabled bool = false
 param searchEndpoint string
 param storageBlobEndpoint string
 param storageDfsEndpoint string
@@ -56,6 +57,10 @@ module containerApp 'br/public:avm/res/app/container-app:0.23.0' = {
       {
         env: [
           {
+            name: 'ASK_HR_PUBLIC_DEMO_ENABLED'
+            value: string(publicDemoEnabled)
+          }
+          {
             name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
             value: applicationInsightsConnectionString
           }
@@ -70,6 +75,10 @@ module containerApp 'br/public:avm/res/app/container-app:0.23.0' = {
           {
             name: 'AZURE_CLIENT_ID'
             value: webIdentity.properties.clientId
+          }
+          {
+            name: 'FOUNDRY_CALLER_OBJECT_ID'
+            value: webIdentity.properties.principalId
           }
           {
             name: 'AZURE_KEY_VAULT_ENDPOINT'

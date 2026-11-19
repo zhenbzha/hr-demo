@@ -15,6 +15,9 @@ import { config, signInScopes } from "@/lib/config";
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
+  if (config.publicDemoEnabled) {
+    return NextResponse.redirect(new URL("/", config.appBaseUrl));
+  }
   const url = new URL(request.url);
   const session =
     getSession(request.cookies.get(config.sessionCookieName)?.value) ??

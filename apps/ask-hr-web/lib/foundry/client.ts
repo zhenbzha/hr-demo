@@ -18,7 +18,7 @@ export type HostedAgentStreamEvent =
 
 type InvokeAgentInput = {
   message: string;
-  searchToken: string;
+  searchToken?: string;
   userObjectId: string;
   previousResponseId?: string;
   signal?: AbortSignal;
@@ -49,7 +49,9 @@ export async function invokeAgentStream(
     headers: {
       Authorization: ["Bearer", foundryToken].join(" "),
       "Content-Type": "application/json",
-      "x-client-search-authorization": input.searchToken,
+      ...(input.searchToken
+        ? { "x-client-search-authorization": input.searchToken }
+        : {}),
       "x-ms-user-identity": input.userObjectId,
     },
     body: JSON.stringify({

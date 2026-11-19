@@ -7,6 +7,7 @@ type RequiredEnvironment =
   | "ENTRA_REDIRECT_URI"
   | "APP_BASE_URL"
   | "FOUNDRY_AGENT_ENDPOINT"
+  | "FOUNDRY_CALLER_OBJECT_ID"
   | "AZURE_STORAGE_DFS_ENDPOINT"
   | "AZURE_STORAGE_FILE_SYSTEM";
 
@@ -18,13 +19,19 @@ function requireEnvironment(name: RequiredEnvironment): string {
   return value;
 }
 
+const publicDemoEnabled = process.env.ASK_HR_PUBLIC_DEMO_ENABLED === "true";
+
 export const config = {
+  publicDemoEnabled,
   entraTenantId: requireEnvironment("ENTRA_TENANT_ID"),
   entraClientId: requireEnvironment("ENTRA_CLIENT_ID"),
   entraClientSecret: requireEnvironment("ENTRA_CLIENT_SECRET"),
   entraRedirectUri: requireEnvironment("ENTRA_REDIRECT_URI"),
   appBaseUrl: requireEnvironment("APP_BASE_URL"),
   foundryAgentEndpoint: requireEnvironment("FOUNDRY_AGENT_ENDPOINT"),
+  foundryCallerObjectId: publicDemoEnabled
+    ? requireEnvironment("FOUNDRY_CALLER_OBJECT_ID")
+    : "",
   storageDfsEndpoint: requireEnvironment("AZURE_STORAGE_DFS_ENDPOINT"),
   storageFileSystem: requireEnvironment("AZURE_STORAGE_FILE_SYSTEM"),
   foundryAgentName: process.env.FOUNDRY_AGENT_NAME?.trim() || "ask-hr",

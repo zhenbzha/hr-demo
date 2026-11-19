@@ -63,7 +63,7 @@ const suggestions = [
   },
 ];
 
-export function ChatShell({ user }: { user: ChatUser }) {
+export function ChatShell({ user }: { user?: ChatUser }) {
   const [input, setInput] = useState("");
   const [selectedCitation, setSelectedCitation] = useState<Citation>();
   const messageEnd = useRef<HTMLDivElement | null>(null);
@@ -71,14 +71,14 @@ export function ChatShell({ user }: { user: ChatUser }) {
     useChatStream();
 
   const initials = useMemo(() => {
-    const source = user.name || user.username;
+    const source = user?.name || user?.username || "Public demo";
     return source
       .split(/[\s.@]+/)
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
       .join("");
-  }, [user.name, user.username]);
+  }, [user?.name, user?.username]);
 
   const latestMessageText = messages.at(-1)?.text;
   useEffect(() => {
@@ -129,12 +129,14 @@ export function ChatShell({ user }: { user: ChatUser }) {
             </Avatar>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">
-                {user.name || "Signed-in user"}
+                {user ? user.name || "Signed-in user" : "Public demo"}
               </p>
-              <p className="truncate text-xs text-slate-500">{user.username}</p>
+              <p className="truncate text-xs text-slate-500">
+                {user?.username}
+              </p>
             </div>
           </div>
-          <SignOutButton />
+          {user && <SignOutButton />}
         </div>
       </aside>
 
@@ -145,7 +147,7 @@ export function ChatShell({ user }: { user: ChatUser }) {
         <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-16 shrink-0 items-center justify-between border-b bg-white px-4 lg:hidden">
             <Brand compact />
-            <SignOutButton compact />
+            {user && <SignOutButton compact />}
           </header>
 
           <section className="flex min-h-0 flex-1 flex-col bg-slate-50/60">

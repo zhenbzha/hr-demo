@@ -14,14 +14,21 @@ class SecurityContext(Protocol):
     platform_context: PlatformContext
 
 
-def require_security_context(context: SecurityContext) -> tuple[str, str]:
+def _require_search_access(user_search_token: str | None) -> None:
+    if (
+        user_search_token is None
+        and os.environ.get("ASK_HR_PUBLIC_DEMO_ENABLED") == "true"
+    ):
+        return
+    if not user_search_token or not user_search_token.strip():
+        raise PermissionError("A delegated Azure AI Search token is required")
+
+
+def require_security_context(context: SecurityContext) -> tuple[str | None, str]:
     user_search_token = context.client_headers.get(
         "x-client-search-authorization"
     )
-    if not user_search_token:
-        raise PermissionError(
-            "A delegated Azure AI Search token is required"
-        )
+    _require_search_access(user_search_token)
     user_id = context.platform_context.user_id_key
     if not user_id:
         raise PermissionError("A trusted represented-user identity is required")
@@ -53,13 +60,16 @@ def build_search_url(search_endpoint: str) -> str:
 
 def build_search_headers(
     service_token: str,
-    user_search_token: str,
+    user_search_token: str | None,
 ) -> dict[str, str]:
-    return {
+    _require_search_access(user_search_token)
+    headers = {
         "Authorization": "Bearer" + " " + service_token,
-        "x-ms-query-source-authorization": user_search_token,
         "Content-Type": "application/json",
     }
+    if user_search_token is not None:
+        headers["x-ms-query-source-authorization"] = user_search_token
+    return headers
 
 
 def build_search_body(question: str, region: str) -> dict[str, Any]:

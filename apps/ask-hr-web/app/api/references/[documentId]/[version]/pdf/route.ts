@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import parseHttpRange from "range-parser";
 
 import { getCurrentSession } from "@/lib/auth/session";
+import { config } from "@/lib/config";
 import { referencePaths } from "@/lib/references/paths";
 import { referenceFileSystem } from "@/lib/storage/datalake";
 
@@ -50,8 +51,7 @@ async function handle(
   context: { params: Promise<{ documentId: string; version: string }> },
   includeBody: boolean,
 ) {
-  const session = await getCurrentSession();
-  if (!session?.account) {
+  if (!config.publicDemoEnabled && !(await getCurrentSession())?.account) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

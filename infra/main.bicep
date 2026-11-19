@@ -17,6 +17,9 @@ param ingestionPrincipalId string
 @description('Grant the deployment principal permission to send represented-user identities for local diagnostics.')
 param assignDeployerImpersonationRole bool = false
 
+@description('Allow anonymous web access to the fictional demo corpus using application identity.')
+param publicDemoEnabled bool = true
+
 @description('Container image deployed to the Ask HR web Container App.')
 param webImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
@@ -116,6 +119,7 @@ module containerApps './modules/container-apps.bicep' = {
     keyVaultUri: keyVault.outputs.uri
     location: location
     logAnalyticsWorkspaceResourceId: monitoring.outputs.logAnalyticsResourceId
+    publicDemoEnabled: publicDemoEnabled
     searchEndpoint: search.outputs.endpoint
     storageBlobEndpoint: storage.outputs.blobEndpoint
     storageDfsEndpoint: storage.outputs.dfsEndpoint

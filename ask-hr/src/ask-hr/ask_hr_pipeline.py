@@ -216,7 +216,7 @@ async def retrieve_authorized_evidence(
     *,
     question: str,
     regions: list[str],
-    user_search_token: str,
+    user_search_token: str | None,
 ) -> list[dict[str, Any]]:
     search_endpoint = validated_search_endpoint()
     url = build_search_url(search_endpoint)
