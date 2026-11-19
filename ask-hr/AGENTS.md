@@ -1,40 +1,54 @@
 # Coding Agent Instructions
 
-This project is a **Microsoft Foundry hosted agent** — a containerized AI agent that runs in [Foundry Agent Service](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents). The platform handles containerization, hosting, security, scaling, and observability so you can focus on agent logic.
+This is the `ask-hr` Microsoft Foundry hosted-agent project. One Python process
+serves both Responses and Activity; the adapters share the HR pipeline.
+Follow the repository-root `AGENTS.md` and read the Microsoft Foundry skill
+before working on the agent.
 
 ## Key files
 
-- `Dockerfile` — container definition
+- `azure.yaml`: agent service, protocols, model bindings, and code deployment.
+- `src\ask-hr\main.py`: combined SDK host and Responses handler.
+- `src\ask-hr\activity_app.py`: Teams Activity handler.
+- `src\ask-hr\ask_hr_pipeline.py`: shared classification, retrieval, and generation.
+- `src\ask-hr\permission_contract.py`: trusted identity and Search authorization.
+- Agent dependencies: `pyproject.toml`, `uv.lock`, and `requirements.txt`, all
+  under `src\ask-hr`.
+
+The configured deployment uses `codeConfiguration` with Python 3.13 and bundled
+dependencies. The retained `src\ask-hr\Dockerfile` is not the active deployment
+path. The agent's `.agentignore` controls code packaging.
 
 ## Development workflow
 
-The **Azure Developer CLI (`azd`)** manages the full lifecycle:
+Use the agent's own Python environment, separate from the root
+ingestion/evaluation environment. Run project-scoped azd commands from this
+`ask-hr` directory, with the configured environment and service values.
 
-```bash
-azd ai agent run                           # Run locally on http://localhost:8088
-azd ai agent invoke --local "your message" # Test the local agent
-azd deploy                                 # Deploy to Foundry
-azd ai agent invoke "your message"         # Invoke the deployed agent
+```powershell
+$env:AZURE_DEV_USER_AGENT = "microsoft_foundry_skill"
+azd ai agent run --no-client
 ```
 
-## Microsoft Foundry Skill
+Set the user-agent value in the shell only; do not persist it in project
+configuration. Deploy only when requested:
 
-Install the **Microsoft Foundry Skill** for guided deployment, evaluation, and troubleshooting workflows.
-
-Direct install (preferred, works with any coding agent):
-
-```bash
-npx skills add https://github.com/microsoft/azure-skills --skill microsoft-foundry
+```powershell
+$env:AZURE_DEV_USER_AGENT = "microsoft_foundry_skill"
+azd deploy ask-hr --no-prompt
 ```
 
-Or install the Azure Skills Plugin:
+For CLI text invocations of this multi-protocol service, select Responses
+explicitly. Bare unauthenticated requests are not valid smoke tests: follow the
+[authentication contract](README.md#authentication-and-retrieval). Use the
+documented Teams sign-in flow for Activity, not an anonymous emulator substitute.
 
-- **Copilot CLI**: `/plugin marketplace add microsoft/azure-skills` then `/plugin install azure@azure-skills`
-- **Claude Code**: `/plugin install azure@claude-plugins-official`
-
-Then ask naturally, e.g. `Use the Microsoft Foundry Skill to deploy this agent.`
+See [README.md](README.md) for setup, deployment, and evaluation entry points.
+Do not change the approved architecture or deployment order without explicit
+user approval.
 
 ## References
 
 - [Hosted agents overview](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents)
+- [Microsoft Foundry skill source](https://github.com/microsoft/azure-skills/tree/main/.github/plugins/azure-skills/skills/microsoft-foundry)
 - [Microsoft Foundry Skill](https://learn.microsoft.com/en-us/azure/foundry/how-to/develop/use-microsoft-foundry-skill)

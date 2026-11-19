@@ -1,7 +1,12 @@
-# Ask HR Microsoft 365 adapter
+# Ask HR Microsoft 365 Responses adapter
 
 Thin Microsoft 365 Agents SDK service that connects Teams to the existing Ask
-HR Microsoft Foundry hosted agent.
+HR Microsoft Foundry hosted agent through its **Responses endpoint**.
+
+This is a separate channel path from the hosted agent's direct Activity
+integration. For direct Activity setup, use the
+[hosted-agent guide](../../ask-hr/README.md). This adapter does not call the
+Activity endpoint.
 
 ## Request flow
 
@@ -71,8 +76,11 @@ Only the returned response ID is stored in conversation state.
 
 ## Local validation
 
+Use Node.js 22 or later and pnpm. From the repository root:
+
 ```powershell
-pnpm install
+Set-Location apps\ask-hr-m365-adapter
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm lint
 pnpm test

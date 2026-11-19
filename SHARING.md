@@ -1,11 +1,19 @@
-# Production ingestion and manual Foundry evaluation
+# Ingestion and manual Foundry evaluation
 
-These are the application's production scripts, not a separate simplified
-implementation. No distribution package has been created.
+This guide covers the application's ingestion and evaluation scripts, not a
+separate simplified implementation. They use the fictional demo corpus and a
+dedicated demo index; this is not a production-readiness claim.
+No distribution package has been created.
 
 Ingestion and evaluation are independent, manually started operations. They
 assume one operator. There is no concurrent-run orchestration, scheduled
 evaluation, prompt-optimization loop, or deployment step.
+
+[Configuration](#ingestion-configuration-and-source-integrity)
+| [Incremental ingestion](#incremental-updates-and-artifact-versions)
+| [Evaluation](#manual-foundry-evaluation)
+| [Limitations](#evaluation-limitations)
+| [Offline checks](#offline-checks)
 
 ## Source layout
 
@@ -51,8 +59,8 @@ Include the optional judge-check script and its manifest when demonstrating how
 to check the evaluator itself. Its source references require the specific Global
 handbook and Hong Kong leave-policy PDFs named in that manifest.
 
-The existing production inputs contain 13 PDFs and 18 agent-quality
-cases. Reducing a future handoff must not reduce production coverage. The web
+The full demo inputs contain 13 PDFs and 18 agent-quality cases.
+Reducing a future handoff must not reduce the full demo's coverage. The web
 app, hosted-agent implementation, benchmark scripts, deployment state, caches,
 and generated results are not prerequisites for these two scripts. Evaluation
 does require an already deployed, compatible Ask HR Responses endpoint.
@@ -71,11 +79,9 @@ The evaluation extra requires stable `azure-ai-projects>=2.11.0`; the lockfile
 selects 2.11.0, matching the current manual-rubric sample's minimum. This is the
 root evaluation environment, not an upgrade of the separate agent runtime.
 
-On Microsoft-managed devices, use the approved package feed:
-
-```powershell
-$env:UV_INDEX_URL = 'https://packagefeedproxy.microsoft.io/pypi/simple'
-```
+The repository's [uv.toml](uv.toml) already selects
+`https://packagefeedproxy.microsoft.io/pypi/simple` and system certificate trust.
+No manual index override is needed. Do not add public PyPI as a fallback.
 
 Use least-privilege access for the operations being performed: Document
 Intelligence analysis, Azure OpenAI inference, Search index administration and
@@ -347,10 +353,10 @@ artifact paths. Parser/annotation corrections must increment `PARSER_VERSION`.
 Different extraction output under an unchanged fingerprint fails explicitly;
 it is not silently allowed to replace a previously cited artifact.
 
-The web app still uses the same ADLS PDF and annotation paths. Its only required
-change is accepting plain GUIDs as document IDs while retaining legacy IDs.
-Deploy that validator change before indexing GUID-based documents into an index
-used by the web app. This repository change does not deploy anything.
+The current web app accepts GUID document IDs while retaining legacy IDs and
+the same ADLS PDF/annotation paths. When upgrading an older deployment that
+accepts only `HR-` IDs, deploy the current citation validator before indexing
+GUID-based documents. Editing the repository does not deploy that update.
 Old ADLS artifacts are retained so existing citations continue to work.
 The live retrieval and agent-quality cases now use the generated GUIDs.
 
@@ -413,7 +419,8 @@ If omitted, the SDK uses the current Azure CLI account.
 can still use `AZURE_AI_MODEL_DEPLOYMENT_NAME` as a fallback, but set the dedicated
 judge variable to `ask-hr-gpt-5.4`. GPT-5.4 is a
 [documented supported rubric judge](https://learn.microsoft.com/en-us/azure/foundry/concepts/evaluation-evaluators/rubric-evaluators#choose-an-llm-judge-model).
-It is separate from GPT-6 Astra generation and the GPT-6.1 Sol Activity POC.
+It is separate from GPT-6 Astra generation, which is shared by the Responses
+and Activity adapters of the unified `ask-hr` agent.
 Model support does not guarantee correct judgments; review the latest
 [evaluation limitations](#evaluation-limitations) before using acceptance scores.
 
@@ -848,7 +855,7 @@ latency collection.
 
 For an ingestion A/B, use two isolated indexes and knowledge bases with identical
 agent code, prompts, models, questions, and evaluator configuration. This tests
-the full local production decision/retrieval/generation pipeline with live Azure
+the full local decision/retrieval/generation pipeline with live Azure
 services, not a replay of saved search results. It does not test hosted HTTP
 transport, the web UI, or PDF/highlight rendering. Source hashes and SDK versions
 identify the evaluated local code; they are not a claim about a deployed version.
